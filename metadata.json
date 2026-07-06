@@ -1,0 +1,6 @@
+{
+  "name": "App Launcher",
+  "description": "A simple storefront-like interface to group, tag, search, and launch your programs and shortcuts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
