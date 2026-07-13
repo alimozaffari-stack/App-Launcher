@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Shortcut } from "../types";
-import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star, BookmarkPlus, BookmarkMinus } from "lucide-react";
+import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star, BookmarkPlus, BookmarkMinus, CheckSquare, Square } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -20,6 +20,9 @@ interface ShortcutCardProps {
   viewMode?: "grid" | "list";
   sortMode?: "manual" | "alphabetical" | "date";
   isCompact?: boolean;
+  isSelectionMode?: boolean;
+  isSelected?: boolean;
+  onSelectionToggle?: (id: string) => void;
 }
 
 export default function ShortcutCard({ 
@@ -35,7 +38,10 @@ export default function ShortcutCard({
   dndId,
   viewMode = "grid", 
   sortMode = "manual",
-  isCompact = false 
+  isCompact = false,
+  isSelectionMode = false,
+  isSelected = false,
+  onSelectionToggle,
 }: ShortcutCardProps) {
   const [copied, setCopied] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -61,13 +67,21 @@ export default function ShortcutCard({
     isDragging,
   } = useSortable({
     id: dndId || shortcut.id,
-    disabled: isCompact,
+    disabled: isCompact || isSelectionMode,
   });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : undefined,
+  };
+
+  const handleLaunchOrSelect = () => {
+    if (isSelectionMode && onSelectionToggle) {
+      onSelectionToggle(shortcut.id);
+      return;
+    }
+    onLaunch(shortcut);
   };
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -250,25 +264,36 @@ export default function ShortcutCard({
           }}
           className={`group relative flex items-center gap-2 overflow-hidden rounded-lg border border-neutral-850 bg-neutral-900/40 py-1.5 px-2.5 backdrop-blur-md transition-all hover:border-neutral-700 hover:bg-neutral-900/60 ${
             isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl ring-1 ring-amber-500/20" : ""
-          }`}
+          } ${isSelected ? "border-amber-500/50 bg-amber-500/5 ring-1 ring-amber-500/20" : ""}`}
           id={`shortcut-card-${shortcut.id}`}
         >
-          {/* Drag Handle */}
-          <div
-            {...attributes}
-            {...listeners}
-            className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors"
-            title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
-          >
-            <GripVertical className="h-3.5 w-3.5" />
-          </div>
+          {isSelectionMode ? (
+            <button
+              type="button"
+              onClick={() => onSelectionToggle?.(shortcut.id)}
+              className="flex shrink-0 items-center justify-center p-0.5 text-amber-400"
+              title={isSelected ? "Deselect shortcut" : "Select shortcut"}
+              aria-pressed={isSelected}
+            >
+              {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5 text-neutral-500" />}
+            </button>
+          ) : (
+            <div
+              {...attributes}
+              {...listeners}
+              className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors"
+              title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </div>
+          )}
 
           {/* Shortcut Icon (Clickable to Launch!) */}
           <div className="shrink-0">
             <div 
-              onClick={() => onLaunch(shortcut)}
+              onClick={handleLaunchOrSelect}
               className="relative shrink-0 cursor-pointer group/icon overflow-hidden rounded-md border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-8 w-8 items-center justify-center transition-all duration-200 hover:border-amber-500/50 hover:scale-105 active:scale-95 shadow-inner"
-              title={`Click to Launch ${shortcut.name}`}
+              title={isSelectionMode ? `Select ${shortcut.name}` : `Click to Launch ${shortcut.name}`}
             >
               {shortcut.iconUrl ? (
                 <img
@@ -505,19 +530,31 @@ export default function ShortcutCard({
         }}
         className={`group relative flex flex-col justify-between overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/50 p-3 backdrop-blur-md transition-all hover:border-neutral-700 hover:bg-neutral-900/85 hover:shadow-lg ${
           isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl shadow-amber-500/5 ring-1 ring-amber-500/20" : ""
-        }`}
+        } ${isSelected ? "border-amber-500/50 bg-amber-500/5 ring-1 ring-amber-500/20" : ""}`}
         id={`shortcut-card-${shortcut.id}`}
       >
         {/* Top Controls Header */}
         <div className="flex items-center justify-between gap-1 text-neutral-500 h-5 shrink-0 select-none">
-          <div
-            {...attributes}
-            {...listeners}
-            className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing transition-colors shrink-0"
-            title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
-          >
-            <GripVertical className="h-3.5 w-3.5" />
-          </div>
+          {isSelectionMode ? (
+            <button
+              type="button"
+              onClick={() => onSelectionToggle?.(shortcut.id)}
+              className="flex shrink-0 items-center justify-center p-0.5 text-amber-400"
+              title={isSelected ? "Deselect shortcut" : "Select shortcut"}
+              aria-pressed={isSelected}
+            >
+              {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5 text-neutral-500" />}
+            </button>
+          ) : (
+            <div
+              {...attributes}
+              {...listeners}
+              className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing transition-colors shrink-0"
+              title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </div>
+          )}
 
           <div className="flex items-center gap-1 shrink-0">
             {onAddToWorkspace && !isInWorkspace && (
@@ -573,9 +610,9 @@ export default function ShortcutCard({
           {/* Icon/Thumbnail placed above the title - Clicking it launches! */}
           <div className="shrink-0">
             <div 
-              onClick={() => onLaunch(shortcut)}
+              onClick={handleLaunchOrSelect}
               className="relative shrink-0 cursor-pointer group/icon overflow-hidden rounded-xl border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-11 w-11 items-center justify-center transition-all duration-200 hover:border-amber-500/50 hover:scale-105 active:scale-95 shadow-inner"
-              title={`Click to Launch ${shortcut.name}`}
+              title={isSelectionMode ? `Select ${shortcut.name}` : `Click to Launch ${shortcut.name}`}
             >
               {shortcut.iconUrl ? (
                 <img

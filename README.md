@@ -51,6 +51,7 @@ The NSIS installer is written to `dist-desktop\`. The build is currently Windows
 - Desktop import follows Windows' personal and public Desktop locations, scans nested launchers and stores extracted icons.
 - Shortcut cards can belong to multiple groups. Dragging into the nominated workspace adds membership without changing the primary group.
 - The shortcut form can suggest up to three deterministic local tags for the user to review before saving.
+- Bulk selection can add, remove or replace tags; add or remove additional groups; and safely change the primary group across several shortcuts at once.
 - The nominated workspace can hold one-click temporary folder links for the current application session. A temporary link can be pinned as a permanent shortcut or removed at any time.
 - Uploaded icon images are resized before storage.
 - Workspace features reuse the existing renderer and local service; they add no background process or runtime dependency.

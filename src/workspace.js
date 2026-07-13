@@ -115,3 +115,74 @@ export function suggestShortcutTags(shortcut, limit = 3) {
 
   return suggestions;
 }
+
+function normalizeTags(tags) {
+  return Array.from(
+    new Set(
+      (Array.isArray(tags) ? tags : [])
+        .map((tag) => String(tag || "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+export function updateShortcutsInBulk(shortcuts, shortcutIds, action) {
+  const selectedIds = shortcutIds instanceof Set ? shortcutIds : new Set(shortcutIds || []);
+  if (selectedIds.size === 0 || !action?.type) return shortcuts;
+
+  let changed = false;
+  const updated = shortcuts.map((shortcut) => {
+    if (!selectedIds.has(shortcut.id)) return shortcut;
+
+    const currentTags = normalizeTags(shortcut.tags);
+    const currentGroups = Array.from(new Set(shortcut.workspaceTags || []));
+    let nextTags = currentTags;
+    let nextGroups = currentGroups;
+    let nextCategory = shortcut.category;
+
+    if (["add-tags", "remove-tags", "replace-tags"].includes(action.type)) {
+      const requestedTags = normalizeTags(action.tags);
+      if (action.type === "add-tags") {
+        nextTags = Array.from(new Set([...currentTags, ...requestedTags]));
+      } else if (action.type === "remove-tags") {
+        const removed = new Set(requestedTags);
+        nextTags = currentTags.filter((tag) => !removed.has(tag));
+      } else {
+        nextTags = requestedTags;
+      }
+    } else if (action.type === "add-group" && action.group) {
+      if (shortcut.category !== action.group && !currentGroups.includes(action.group)) {
+        nextGroups = [...currentGroups, action.group];
+      }
+    } else if (action.type === "remove-group" && action.group) {
+      nextGroups = currentGroups.filter((group) => group !== action.group);
+    } else if (action.type === "set-primary-group" && action.group) {
+      nextCategory = action.group;
+      nextGroups = Array.from(
+        new Set([
+          ...currentGroups.filter((group) => group !== action.group),
+          ...(shortcut.category !== action.group ? [shortcut.category] : []),
+        ]),
+      );
+    }
+
+    const tagsChanged =
+      nextTags.length !== currentTags.length ||
+      nextTags.some((tag, index) => tag !== currentTags[index]);
+    const groupsChanged =
+      nextGroups.length !== currentGroups.length ||
+      nextGroups.some((group, index) => group !== currentGroups[index]);
+    const categoryChanged = nextCategory !== shortcut.category;
+    if (!tagsChanged && !groupsChanged && !categoryChanged) return shortcut;
+
+    changed = true;
+    return {
+      ...shortcut,
+      category: nextCategory,
+      tags: nextTags,
+      workspaceTags: nextGroups.length > 0 ? nextGroups : undefined,
+    };
+  });
+
+  return changed ? updated : shortcuts;
+}

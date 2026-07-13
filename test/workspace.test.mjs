@@ -9,6 +9,7 @@ import {
   readTemporaryFolders,
   removeShortcutFromWorkspace,
   suggestShortcutTags,
+  updateShortcutsInBulk,
 } from "../src/workspace.js";
 
 const shortcuts = [
@@ -77,4 +78,35 @@ test("suggests no more than three deterministic local tags", () => {
     ),
     ["creative", "design"],
   );
+});
+
+test("bulk updates tags without touching unselected shortcuts", () => {
+  const updated = updateShortcutsInBulk(shortcuts, new Set(["two"]), {
+    type: "add-tags",
+    tags: ["Work", "research", "work"],
+  });
+  assert.equal(updated[0], shortcuts[0]);
+  assert.deepEqual(updated[1].tags, ["work", "research"]);
+
+  const replaced = updateShortcutsInBulk(updated, ["two"], {
+    type: "replace-tags",
+    tags: ["Focused"],
+  });
+  assert.deepEqual(replaced[1].tags, ["focused"]);
+});
+
+test("bulk primary-group changes preserve the former primary membership", () => {
+  const grouped = updateShortcutsInBulk(shortcuts, ["two"], {
+    type: "add-group",
+    group: "AI",
+  });
+  assert.deepEqual(grouped[1].workspaceTags, ["AI"]);
+
+  const promoted = updateShortcutsInBulk(grouped, ["two"], {
+    type: "set-primary-group",
+    group: "Office",
+  });
+  assert.equal(promoted[1].category, "Office");
+  assert.deepEqual(promoted[1].workspaceTags, ["AI", "Research"]);
+  assert.equal(isShortcutInWorkspace(promoted[1], "Research"), true);
 });

@@ -22,7 +22,8 @@ import {
   List,
   Star,
   Bookmark,
-  ArrowDownAZ
+  ArrowDownAZ,
+  ListChecks,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -46,6 +47,7 @@ import EmptyState from "./components/EmptyState";
 import FolderScanModal from "./components/FolderScanModal";
 import NominatedWorkspaceDropZone from "./components/NominatedWorkspaceDropZone";
 import TemporaryFolderCard from "./components/TemporaryFolderCard";
+import BulkEditPanel, { type BulkShortcutAction } from "./components/BulkEditPanel";
 import {
   NOMINATED_CARD_PREFIX,
   addShortcutToWorkspace,
@@ -53,6 +55,7 @@ import {
   isShortcutInWorkspace,
   readTemporaryFolders,
   removeShortcutFromWorkspace,
+  updateShortcutsInBulk,
 } from "./workspace.js";
 
 interface CategoryDoc {
@@ -78,6 +81,10 @@ export default function App() {
   const [showScanModal, setShowScanModal] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [selectedShortcutIds, setSelectedShortcutIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   
   // Launching Modal status
   const [launchStatus, setLaunchStatus] = useState<"connecting" | "success" | "fallback" | "connecting_local">("connecting");
@@ -116,6 +123,30 @@ export default function App() {
     });
     setShortcuts(updated);
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+  };
+
+  const handleSelectionToggle = (id: string) => {
+    setSelectedShortcutIds((current) => {
+      const updated = new Set(current);
+      if (updated.has(id)) updated.delete(id);
+      else updated.add(id);
+      return updated;
+    });
+  };
+
+  const handleExitBulkMode = () => {
+    setIsBulkMode(false);
+    setSelectedShortcutIds(new Set());
+  };
+
+  const handleApplyBulkAction = (action: BulkShortcutAction) => {
+    setShortcuts((current) => {
+      const updated = updateShortcutsInBulk(current, selectedShortcutIds, action);
+      if (updated !== current) {
+        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      }
+      return updated;
+    });
   };
 
   useEffect(() => {
@@ -611,6 +642,11 @@ export default function App() {
       const updated = shortcuts.filter((s) => s.id !== id);
       setShortcuts(updated);
       localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      setSelectedShortcutIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -633,6 +669,8 @@ export default function App() {
     if (confirm("Are you sure you want to clear all shortcuts? This will reset the launcher to a fresh, blank state.")) {
       setShortcuts([]);
       localStorage.removeItem("launcher_shortcuts");
+      setSelectedShortcutIds(new Set());
+      setIsBulkMode(false);
     }
   };
 
@@ -769,6 +807,12 @@ export default function App() {
     .filter((s) => s.lastLaunchedAt !== undefined && s.lastLaunchedAt > 0)
     .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
     .slice(0, 4);
+  const bulkVisibleShortcuts =
+    selectedCategory === "All" && !searchQuery ? displayShortcuts : filteredShortcuts;
+
+  const handleSelectVisibleShortcuts = () => {
+    setSelectedShortcutIds(new Set(bulkVisibleShortcuts.map((shortcut) => shortcut.id)));
+  };
 
   return (
     <DndContext
@@ -988,8 +1032,27 @@ export default function App() {
 
           </div>
 
+          <div className="flex w-full shrink-0 items-center gap-2 xl:w-auto">
+            <button
+              type="button"
+              onClick={() => {
+                if (isBulkMode) handleExitBulkMode();
+                else setIsBulkMode(true);
+              }}
+              disabled={shortcuts.length === 0}
+              className={`inline-flex h-[40px] items-center gap-1.5 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40 ${
+                isBulkMode
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-400"
+                  : "border-neutral-800 bg-neutral-900/40 text-neutral-400 hover:border-neutral-700 hover:text-white"
+              }`}
+              aria-pressed={isBulkMode}
+            >
+              <ListChecks className="h-3.5 w-3.5" />
+              Bulk actions
+            </button>
+
           {/* Pin dropdown to nominate a category to the dashboard */}
-          <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors w-full xl:w-auto justify-between xl:justify-start h-[40px] self-start">
+          <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors flex-1 xl:flex-none justify-between xl:justify-start h-[40px] self-start">
             <div className="flex items-center gap-1.5">
               <Bookmark className="h-3.5 w-3.5 text-amber-500 fill-amber-500/10" />
               <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">PIN:</span>
@@ -1010,7 +1073,20 @@ export default function App() {
               ))}
             </select>
           </div>
+          </div>
         </div>
+
+        {isBulkMode && (
+          <BulkEditPanel
+            selectedCount={selectedShortcutIds.size}
+            visibleCount={bulkVisibleShortcuts.length}
+            categories={categoryNamesList}
+            onSelectVisible={handleSelectVisibleShortcuts}
+            onClearSelection={() => setSelectedShortcutIds(new Set())}
+            onDone={handleExitBulkMode}
+            onApply={handleApplyBulkAction}
+          />
+        )}
 
         {/* Loading Spinner */}
         {loading ? (
@@ -1373,6 +1449,9 @@ export default function App() {
                               onAddToWorkspace={handleAddShortcutToWorkspace}
                               workspaceName={nominatedCategory}
                               isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
+                              isSelectionMode={isBulkMode}
+                              isSelected={selectedShortcutIds.has(shortcut.id)}
+                              onSelectionToggle={handleSelectionToggle}
                             />
                           ))}
                         </AnimatePresence>
@@ -1526,6 +1605,9 @@ export default function App() {
                             onAddToWorkspace={handleAddShortcutToWorkspace}
                             workspaceName={nominatedCategory}
                             isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
+                            isSelectionMode={isBulkMode}
+                            isSelected={selectedShortcutIds.has(shortcut.id)}
+                            onSelectionToggle={handleSelectionToggle}
                           />
                         ))}
                       </AnimatePresence>
