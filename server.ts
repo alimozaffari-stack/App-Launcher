@@ -1,52 +1,195 @@
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
+import { execFile } from "node:child_process";
+import type { Server } from "node:http";
+import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
-import { exec } from "child_process";
 import dotenv from "dotenv";
+import express from "express";
 
-dotenv.config();
+const DEFAULT_PORT = 3000;
+const DEFAULT_BIND_HOST = "127.0.0.1";
+const DEFAULT_BROWSER_HOST = "localhost";
+const MAX_TARGET_LENGTH = 4096;
+const MAX_NAME_LENGTH = 200;
+const BLOCKED_PROTOCOLS = new Set(["data:", "javascript:", "vbscript:"]);
+
+const envFile = process.env.APP_LAUNCHER_ENV_FILE;
+dotenv.config(envFile ? { path: envFile, quiet: true } : { quiet: true });
 
 const isProd = process.env.NODE_ENV === "production";
-const PORT = 3000;
 
-// Lazy initialize Google Gen AI to prevent startup crashes if API key is missing
+export interface StartServerOptions {
+  port?: number;
+  host?: "127.0.0.1" | "::1" | "localhost";
+  browserHost?: "127.0.0.1" | "localhost";
+}
+
+export interface RunningServer {
+  server: Server;
+  port: number;
+  url: string;
+}
+
 let aiClient: GoogleGenAI | null = null;
+
 function getGeminiClient() {
   if (!aiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not configured. Please add it in the Secrets panel.");
+      throw new Error("GEMINI_API_KEY is not configured.");
     }
     aiClient = new GoogleGenAI({ apiKey });
   }
   return aiClient;
 }
 
-async function startServer() {
-  const app = express();
-  app.use(express.json());
+function readRequiredString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength || /[\0\r\n]/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
 
-  // API Route: Suggest categories, tags, and descriptions for a program/game
+function readLaunchTarget(value: unknown): string | null {
+  const target = readRequiredString(value, MAX_TARGET_LENGTH);
+  if (!target || target.includes('"')) return null;
+
+  const isWindowsDrivePath = /^[a-z]:[\\/]/i.test(target);
+  if (!isWindowsDrivePath) {
+    const protocol = target.match(/^([a-z][a-z\d+.-]*:)/i)?.[1]?.toLowerCase();
+    if (protocol && BLOCKED_PROTOCOLS.has(protocol)) return null;
+  }
+
+  return target;
+}
+
+function runPowerShell(
+  script: string,
+  extraEnv: Record<string, string>,
+  timeout: number,
+  maxBuffer = 4 * 1024 * 1024,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        encoding: "utf8",
+        env: { ...process.env, ...extraEnv },
+        maxBuffer,
+        timeout,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ stdout, stderr });
+      },
+    );
+  });
+}
+
+function setSecurityHeaders(
+  _req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+    ].join("; "),
+  );
+  res.setHeader("Permissions-Policy", "camera=(), geolocation=(), microphone=()");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+}
+
+function protectLoopbackOrigin(allowedHosts: Set<string>) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const hostname = req.hostname?.toLowerCase();
+    if (!hostname || !allowedHosts.has(hostname)) {
+      return res.status(403).json({ error: "Request host is not permitted." });
+    }
+
+    const origin = req.get("origin");
+    if (origin) {
+      try {
+        const originHostname = new URL(origin).hostname.toLowerCase();
+        if (!allowedHosts.has(originHostname)) {
+          return res.status(403).json({ error: "Request origin is not permitted." });
+        }
+      } catch {
+        return res.status(403).json({ error: "Request origin is invalid." });
+      }
+    }
+
+    next();
+  };
+}
+
+export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
+  const port = options.port ?? Number.parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
+  const host = options.host ?? DEFAULT_BIND_HOST;
+  const browserHost = options.browserHost ?? DEFAULT_BROWSER_HOST;
+
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid server port: ${port}`);
+  }
+
+  const app = express();
+  app.disable("x-powered-by");
+  app.use(setSecurityHeaders);
+
+  const allowedHosts = new Set([
+    "127.0.0.1",
+    "::1",
+    "localhost",
+    host.toLowerCase(),
+    browserHost.toLowerCase(),
+  ]);
+  app.use(protectLoopbackOrigin(allowedHosts));
+
+  app.use("/api", (req, res, next) => {
+    if (["POST", "PUT", "PATCH"].includes(req.method) && !req.is("application/json")) {
+      return res.status(415).json({ error: "API requests must use application/json." });
+    }
+    next();
+  });
+  app.use(express.json({ limit: "32kb", strict: true }));
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", platform: process.platform });
+  });
+
   app.post("/api/suggest", async (req, res) => {
-    const { name } = req.body;
+    const name = readRequiredString(req.body?.name, MAX_NAME_LENGTH);
     if (!name) {
-      return res.status(400).json({ error: "Program name is required" });
+      return res.status(400).json({ error: "A valid program name is required." });
     }
 
     try {
       const ai = getGeminiClient();
-      const prompt = `You are an expert utility cataloging and gaming assistant. For the program or game named "${name}", suggest:
-1. A category or primary use-case group. Standard categories are: "Gaming", "Productivity", "Creative", "Development", "Streaming & Video", "Utilities", "Communication". Pick one of these or suggest a highly suitable one.
-2. A list of 3-5 relevant search keywords/tags (all lowercase, clean, e.g. "photoshop" -> "editing, adobe, design, photo").
-3. A short, elegant 1-sentence description of what this program does.
+      const prompt = `You are a utility cataloguing assistant. The program name is ${JSON.stringify(name)}.
+Suggest:
+1. One category or primary use-case group. Prefer: Gaming, Productivity, Creative, Development, Streaming & Video, Utilities, or Communication.
+2. Three to five relevant lowercase search tags.
+3. One concise sentence describing the program.
 
-Respond strictly in JSON format matching this schema:
-{
-  "category": "string",
-  "tags": ["string"],
-  "description": "string"
-}`;
+Return only JSON matching the supplied schema.`;
 
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
@@ -57,272 +200,207 @@ Respond strictly in JSON format matching this schema:
             type: "OBJECT",
             properties: {
               category: { type: "STRING" },
-              tags: {
-                type: "ARRAY",
-                items: { type: "STRING" }
-              },
-              description: { type: "STRING" }
+              tags: { type: "ARRAY", items: { type: "STRING" } },
+              description: { type: "STRING" },
             },
-            required: ["category", "tags", "description"]
-          }
-        }
+            required: ["category", "tags", "description"],
+          },
+        },
       });
 
-      const responseText = response.text;
-      if (!responseText) {
-        throw new Error("Empty response from Gemini API");
-      }
-
-      const parsed = JSON.parse(responseText);
-      return res.json(parsed);
-    } catch (error: any) {
-      console.error("Gemini Suggestion Error:", error);
-      return res.status(500).json({
-        error: error.message || "Failed to generate suggestions",
+      if (!response.text) throw new Error("The suggestion service returned no content.");
+      return res.json(JSON.parse(response.text));
+    } catch (error) {
+      console.error("Gemini suggestion failed:", error);
+      return res.status(503).json({
+        error: "AI suggestions are unavailable.",
         fallback: {
           category: "Utilities",
           tags: [name.toLowerCase().replace(/\s+/g, "")],
-          description: `Shortcut launcher for ${name}.`
-        }
+          description: `Shortcut launcher for ${name}.`,
+        },
       });
     }
   });
 
-  // API Route: Launch program locally
-  app.post("/api/launch", (req, res) => {
-    const { execPath } = req.body;
-    if (!execPath) {
-      return res.status(400).json({ error: "Execution path is required" });
+  app.post("/api/launch", async (req, res) => {
+    const target = readLaunchTarget(req.body?.execPath);
+    if (!target) {
+      return res.status(400).json({ error: "A valid launch target is required." });
     }
-
-    // Check platform
     if (process.platform !== "win32") {
       return res.status(400).json({
-        error: "Direct local launching is only supported when running this application locally on Windows.",
-        isLocal: false
+        error: "Direct launching is supported only by the Windows desktop application.",
+        isLocal: false,
       });
     }
 
-    // Launch on Windows
-    // We run `start "" "execPath"` to open the file, directory, shortcut, or custom URI protocol safely
-    const command = `start "" "${execPath}"`;
-    exec(command, (error) => {
-      if (error) {
-        console.error("Local launch error:", error);
-        return res.status(500).json({
-          error: `Failed to launch program. Ensure the path is correct: ${error.message}`
-        });
-      }
-      return res.json({ success: true, message: `Successfully launched ${execPath}` });
-    });
-  });
+    const script = `
+      $target = [Environment]::ExpandEnvironmentVariables($env:APP_LAUNCHER_TARGET)
+      if ([string]::IsNullOrWhiteSpace($target)) { throw "Launch target is empty." }
+      Start-Process -FilePath $target -ErrorAction Stop
+    `;
 
-  // API Route: Extract icon from executable
-  app.post("/api/extract-icon", (req, res) => {
-    let { execPath } = req.body;
-    if (!execPath) {
-      return res.status(400).json({ error: "Execution path is required" });
-    }
-
-    // Replace environment variables in path
-    if (process.platform === "win32") {
-      execPath = execPath.replace(/%([^%]+)%/g, (_, n) => process.env[n] || `%${n}%`);
-
-      const psCommand = `
-        Add-Type -AssemblyName System.Drawing
-        $path = "${execPath.replace(/"/g, '`"')}"
-        if (Test-Path $path) {
-          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
-          $bitmap = $icon.ToBitmap()
-          $ms = New-Object System.IO.MemoryStream
-          $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-          $bytes = $ms.ToArray()
-          $base64 = [Convert]::ToBase64String($bytes)
-          Write-Output $base64
-        } else {
-          Write-Error "File not found"
-          exit 1
-        }
-      `;
-
-      exec(`powershell -NoProfile -Command "${psCommand.replace(/\\n/g, ' ')}"`, (error, stdout, stderr) => {
-        if (error) {
-          console.error("Icon extraction error:", error, stderr);
-          return res.status(500).json({
-            error: `Failed to extract icon: ${error.message}`
-          });
-        }
-
-        const base64 = stdout.trim().replace(/[\r\n]/g, "");
-        if (base64) {
-          return res.json({ success: true, iconUrl: `data:image/png;base64,${base64}` });
-        } else {
-          return res.status(500).json({ error: "No base64 data returned from icon extraction" });
-        }
-      });
-    } else {
-      // Sandbox simulation: return a nice, dynamic SVG colored depending on the name
-      const name = path.basename(execPath, path.extname(execPath)) || "App";
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      const h = Math.abs(hash % 360);
-      const color = `hsl(${h}, 70%, 50%)`;
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-        <rect width="100" height="100" rx="22" fill="${color}"/>
-        <text x="50" y="58" font-family="system-ui, sans-serif" font-size="38" font-weight="bold" fill="white" text-anchor="middle">${name.charAt(0).toUpperCase()}</text>
-      </svg>`;
-      const base64Svg = Buffer.from(svg).toString("base64");
-      return res.json({
-        success: true,
-        iconUrl: `data:image/svg+xml;base64,${base64Svg}`,
-        simulated: true,
-        message: "Simulated icon extraction using modern dynamic SVG builder."
+    try {
+      await runPowerShell(script, { APP_LAUNCHER_TARGET: target }, 15_000);
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Local launch failed:", error);
+      return res.status(500).json({
+        error: "The target could not be launched. Check that its path or protocol is valid.",
       });
     }
   });
 
-  // API Route: Scan folder for shortcuts (.lnk and .exe)
-  app.post("/api/scan-folder", (req, res) => {
-    let { folderPath } = req.body;
-    if (!folderPath) {
-      return res.status(400).json({ error: "Folder path is required" });
+  app.post("/api/extract-icon", async (req, res) => {
+    const target = readLaunchTarget(req.body?.execPath);
+    if (!target) {
+      return res.status(400).json({ error: "A valid executable path is required." });
+    }
+    if (process.platform !== "win32") {
+      return res.status(400).json({
+        error: "Icon extraction is supported only by the Windows desktop application.",
+      });
     }
 
-    // Replace environment variables in path
-    if (process.platform === "win32") {
-      folderPath = folderPath.replace(/%([^%]+)%/g, (_, n) => process.env[n] || `%${n}%`);
-      
-      // PowerShell script to parse shortcuts (.lnk) and executables (.exe)
-      const psCommand = `
-        $folder = "${folderPath.replace(/"/g, '`"')}"
-        if (-not (Test-Path $folder)) {
-          Write-Error "Folder does not exist"
-          exit 1
+    const script = `
+      Add-Type -AssemblyName System.Drawing
+      $target = [Environment]::ExpandEnvironmentVariables($env:APP_LAUNCHER_TARGET)
+      if (-not [System.IO.File]::Exists($target)) { throw "File not found." }
+      $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($target)
+      if ($null -eq $icon) { throw "No associated icon." }
+      try {
+        $bitmap = $icon.ToBitmap()
+        $stream = New-Object System.IO.MemoryStream
+        try {
+          $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+          [Convert]::ToBase64String($stream.ToArray())
+        } finally {
+          $stream.Dispose()
+          $bitmap.Dispose()
         }
-        $shell = New-Object -ComObject WScript.Shell
-        $results = @()
+      } finally {
+        $icon.Dispose()
+      }
+    `;
 
-        # Scan LNK files
-        Get-ChildItem -Path $folder -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
-          try {
-            $sc = $shell.CreateShortcut($_.FullName)
-            if ($sc.TargetPath) {
+    try {
+      const { stdout } = await runPowerShell(
+        script,
+        { APP_LAUNCHER_TARGET: target },
+        15_000,
+      );
+      const base64 = stdout.trim().replace(/[\r\n]/g, "");
+      if (!base64) throw new Error("No icon data returned.");
+      return res.json({ success: true, iconUrl: `data:image/png;base64,${base64}` });
+    } catch (error) {
+      console.error("Icon extraction failed:", error);
+      return res.status(500).json({ error: "No icon could be extracted from that file." });
+    }
+  });
+
+  app.post("/api/scan-folder", async (req, res) => {
+    const folderPath = readRequiredString(req.body?.folderPath, MAX_TARGET_LENGTH);
+    if (!folderPath || folderPath.includes('"')) {
+      return res.status(400).json({ error: "A valid folder path is required." });
+    }
+    if (process.platform !== "win32") {
+      return res.status(400).json({
+        error: "Folder scanning is supported only by the Windows desktop application.",
+      });
+    }
+
+    const script = `
+      $folder = [Environment]::ExpandEnvironmentVariables($env:APP_LAUNCHER_FOLDER)
+      if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+        throw "Folder does not exist."
+      }
+      $shell = New-Object -ComObject WScript.Shell
+      $results = @()
+      Get-ChildItem -LiteralPath $folder -File -ErrorAction Stop |
+        Where-Object { $_.Extension -in ".lnk", ".exe" } |
+        Select-Object -First 500 |
+        ForEach-Object {
+          if ($_.Extension -eq ".lnk") {
+            try {
+              $shortcut = $shell.CreateShortcut($_.FullName)
               $results += [PSCustomObject]@{
                 name = $_.BaseName
-                execPath = $sc.TargetPath
-                description = $sc.Description
+                execPath = $_.FullName
+                description = $shortcut.Description
                 category = "Others"
                 tags = @($_.BaseName.ToLower())
               }
+            } catch {}
+          } else {
+            $results += [PSCustomObject]@{
+              name = $_.BaseName
+              execPath = $_.FullName
+              description = "Direct executable launcher."
+              category = "Others"
+              tags = @($_.BaseName.ToLower())
             }
-          } catch {}
-        }
-
-        # Scan EXE files
-        Get-ChildItem -Path $folder -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object {
-          $results += [PSCustomObject]@{
-            name = $_.BaseName
-            execPath = $_.FullName
-            description = "Direct executable launcher."
-            category = "Others"
-            tags = @($_.BaseName.ToLower())
           }
         }
+      ConvertTo-Json -InputObject @($results) -Compress -Depth 3
+    `;
 
-        $results | ConvertTo-Json -Compress
-      `;
-
-      exec(`powershell -NoProfile -Command "${psCommand.replace(/\n/g, ' ')}"`, (error, stdout, stderr) => {
-        if (error) {
-          console.error("Scan folder error:", error, stderr);
-          return res.status(500).json({
-            error: `Failed to scan folder. Ensure the path is accessible and valid: ${error.message}`
-          });
-        }
-
-        try {
-          const parsed = JSON.parse(stdout.trim() || "[]");
-          // If only one item, JSON is returned as an object, make it an array
-          const shortcutsList = Array.isArray(parsed) ? parsed : [parsed];
-          return res.json({ success: true, shortcuts: shortcutsList, platform: "win32" });
-        } catch (parseErr) {
-          return res.json({ success: true, shortcuts: [], platform: "win32", message: "No shortcuts found or parsing failed." });
-        }
-      });
-    } else {
-      // Graceful Sandbox Simulation (Mac / Linux)
-      // Since we are running in the cloud sandbox, we will return some mock shortcuts
-      // based on standard application folders so that the user can experience the scan feature!
-      const simulatedShortcuts = [
-        {
-          name: "Steam",
-          execPath: "C:\\Program Files (x86)\\Steam\\steam.exe",
-          description: "Valve Steam game launcher",
-          category: "Gaming",
-          tags: ["steam", "gaming", "launcher"]
-        },
-        {
-          name: "Discord",
-          execPath: "C:\\Users\\%USERNAME%\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe",
-          description: "All-in-one voice and text chat",
-          category: "Communication",
-          tags: ["discord", "chat", "voice"]
-        },
-        {
-          name: "Adobe Photoshop",
-          execPath: "C:\\Program Files\\Adobe\\Adobe Photoshop 2024\\Photoshop.exe",
-          description: "Professional digital imaging and graphics design",
-          category: "Photography",
-          tags: ["photoshop", "editing", "adobe"]
-        },
-        {
-          name: "Microsoft Word",
-          execPath: "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
-          description: "Word processing utility",
-          category: "Office",
-          tags: ["word", "office", "document"]
-        },
-        {
-          name: "VS Code",
-          execPath: "C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
-          description: "Lightweight source code editor",
-          category: "Development",
-          tags: ["vscode", "code", "editor"]
-        }
-      ];
-
+    try {
+      const { stdout } = await runPowerShell(
+        script,
+        { APP_LAUNCHER_FOLDER: folderPath },
+        30_000,
+        8 * 1024 * 1024,
+      );
+      const parsed = JSON.parse(stdout.trim() || "[]");
       return res.json({
         success: true,
-        shortcuts: simulatedShortcuts,
-        platform: "simulation",
-        message: `Simulated scan of '${folderPath}'. If you run this app locally on Windows, it will scan your real directory!`
+        shortcuts: Array.isArray(parsed) ? parsed : [parsed],
+        platform: "win32",
+      });
+    } catch (error) {
+      console.error("Folder scan failed:", error);
+      return res.status(500).json({
+        error: "The folder could not be scanned. Check that it exists and is accessible.",
       });
     }
   });
 
-  // Vite Integration
   if (!isProd) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    // In production, server.cjs is bundled inside the dist directory itself.
-    // Using __dirname ensures that static assets are resolved relative to the actual code location
-    // rather than the working directory (process.cwd()) which can change when launched via shortcuts.
     const distPath = __dirname;
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get(["/server.cjs", "/server.cjs.map"], (_req, res) => res.sendStatus(404));
+    app.use(express.static(distPath, { dotfiles: "deny", index: false }));
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  const server = await new Promise<Server>((resolve, reject) => {
+    const listener = app.listen(port, host, () => resolve(listener));
+    listener.once("error", reject);
   });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Could not determine the local server address.");
+  }
+
+  const url = `http://${browserHost}:${address.port}`;
+  console.log(`App Launcher server ready at ${url}`);
+  return { server, port: address.port, url };
 }
 
-startServer();
+if (process.env.APP_LAUNCHER_EMBEDDED !== "1") {
+  startServer().catch((error) => {
+    console.error("App Launcher server failed to start:", error);
+    process.exitCode = 1;
+  });
+}

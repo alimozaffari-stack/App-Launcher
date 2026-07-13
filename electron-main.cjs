@@ -1,97 +1,184 @@
-const { app, BrowserWindow } = require("electron");
-const path = require("path");
+const path = require("node:path");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 
+const DESKTOP_PORT = 3000;
+
+let backendServer = null;
+let backendUrl = null;
 let mainWindow = null;
 
-function startExpressServer() {
-  console.log("Starting backend Express server inside Electron process...");
-  // Set NODE_ENV to production so it serves static files from the dist directory
+async function startExpressServer() {
+  process.env.APP_LAUNCHER_EMBEDDED = "1";
+  process.env.APP_LAUNCHER_ENV_FILE = path.join(app.getPath("userData"), ".env");
   process.env.NODE_ENV = "production";
-  process.env.PORT = "3000";
+  process.env.PORT = String(DESKTOP_PORT);
 
+  const serverPath = path.join(__dirname, "dist", "server.cjs");
+  const { startServer } = require(serverPath);
+  const running = await startServer({
+    port: DESKTOP_PORT,
+    host: "127.0.0.1",
+    browserHost: "localhost",
+  });
+
+  backendServer = running.server;
+  backendUrl = running.url;
+}
+
+function isSafeExternalUrl(rawUrl) {
   try {
-    const serverPath = path.join(__dirname, "dist", "server.cjs");
-    require(serverPath);
-    console.log("Backend Express server successfully loaded inside Electron!");
-  } catch (err) {
-    console.error("Failed to require backend server:", err);
+    const protocol = new URL(rawUrl).protocol.toLowerCase();
+    return !["data:", "devtools:", "file:", "javascript:", "vbscript:"].includes(protocol);
+  } catch {
+    return false;
   }
 }
 
+function openExternalUrl(rawUrl) {
+  if (!isSafeExternalUrl(rawUrl)) return;
+  shell.openExternal(rawUrl).catch((error) => {
+    console.error("Could not open external URL:", error);
+  });
+}
+
 function createWindow() {
+  if (!backendUrl) {
+    throw new Error("The local application server is not ready.");
+  }
+
+  const allowedOrigin = new URL(backendUrl).origin;
+  const isDevelopment = !app.isPackaged;
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     title: "App Launcher",
-    icon: path.join(__dirname, "public", "icon.png"),
     backgroundColor: "#0a0a0a",
-    show: false, // Don't show until ready
+    show: false,
+    autoHideMenuBar: true,
     webPreferences: {
-      nodeIntegration: false,
       contextIsolation: true,
-    }
+      devTools: isDevelopment,
+      nodeIntegration: false,
+      preload: path.join(__dirname, "electron-preload.cjs"),
+      sandbox: true,
+      spellcheck: false,
+      webSecurity: true,
+    },
   });
 
-  // Hide the default menu bar for a modern utility look
-  mainWindow.setMenuBarVisibility(false);
+  const isAllowedClipboardWrite = (permission, requestingUrl) => {
+    if (permission !== "clipboard-sanitized-write") return false;
+    try {
+      return new URL(requestingUrl).origin === allowedOrigin;
+    } catch {
+      return false;
+    }
+  };
 
-  // Add developer-friendly troubleshooting shortcuts
-  mainWindow.webContents.on("before-input-event", (event, input) => {
-    // F12 or Ctrl+Shift+I toggles DevTools
-    if (input.key === "F12" || ((input.control || input.meta) && input.shift && input.key.toLowerCase() === "i")) {
-      mainWindow.webContents.toggleDevTools();
-      event.preventDefault();
-    }
-    // F5 reloads the window
-    if (input.key === "F5" || ((input.control || input.meta) && input.key.toLowerCase() === "r")) {
-      mainWindow.reload();
-      event.preventDefault();
-    }
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (_webContents, permission, requestingOrigin) =>
+      isAllowedClipboardWrite(permission, requestingOrigin),
+  );
+
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) =>
+      callback(isAllowedClipboardWrite(permission, webContents.getURL())),
+  );
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: "deny" };
   });
 
-  // Wait a brief moment for the express server to start up, then load the local URL
-  setTimeout(() => {
-    mainWindow.loadURL("http://localhost:3000")
-      .then(() => {
-        mainWindow.show();
-      })
-      .catch((err) => {
-        console.error("Failed to load local app URL, retrying in 1s...", err);
-        setTimeout(() => {
-          mainWindow.loadURL("http://localhost:3000").then(() => mainWindow.show());
-        }, 1000);
-      });
-  }, 400);
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    try {
+      if (new URL(url).origin === allowedOrigin) return;
+    } catch {
+      // Invalid navigation is blocked below.
+    }
+    event.preventDefault();
+    openExternalUrl(url);
+  });
+
+  if (isDevelopment) {
+    mainWindow.webContents.on("before-input-event", (event, input) => {
+      const key = input.key.toLowerCase();
+      if (
+        input.key === "F12" ||
+        ((input.control || input.meta) && input.shift && key === "i")
+      ) {
+        mainWindow.webContents.toggleDevTools();
+        event.preventDefault();
+      }
+      if (
+        input.key === "F5" ||
+        ((input.control || input.meta) && key === "r")
+      ) {
+        mainWindow.reload();
+        event.preventDefault();
+      }
+    });
+  }
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  mainWindow.loadURL(backendUrl).catch((error) => {
+    console.error("The desktop interface could not be loaded:", error);
+    dialog.showErrorBox(
+      "App Launcher could not start",
+      "The local interface failed to load. Close any application using port 3000 and try again.",
+    );
+    app.quit();
+  });
 }
 
-// Ensure single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
+
 if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
 
-  app.on("ready", () => {
-    startExpressServer();
-    createWindow();
-  });
+  app.whenReady()
+    .then(async () => {
+      await startExpressServer();
+      createWindow();
+
+      app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    })
+    .catch((error) => {
+      console.error("App Launcher failed to start:", error);
+      dialog.showErrorBox(
+        "App Launcher could not start",
+        error?.code === "EADDRINUSE"
+          ? "Port 3000 is already in use. Close the other application and try again."
+          : "The local application service failed to start.",
+      );
+      app.quit();
+    });
 }
 
-// Clean up on exit
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });
 
+app.on("will-quit", () => {
+  backendServer?.close();
+  backendServer = null;
+});

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Search, Loader2, CheckSquare, Square, Folder, AlertTriangle, ChevronRight, HelpCircle, ArrowRight, Sparkles, Plus } from "lucide-react";
+import { X, Loader2, CheckSquare, Square, Folder, AlertTriangle } from "lucide-react";
 import { Shortcut } from "../types";
 
 interface ScannedShortcut {
@@ -22,7 +22,6 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
   const [loading, setLoading] = useState(false);
   const [scannedItems, setScannedItems] = useState<ScannedShortcut[]>([]);
   const [scanMessage, setScanMessage] = useState("");
-  const [isSimulation, setIsSimulation] = useState(false);
   const [error, setError] = useState("");
   const [importing, setImporting] = useState(false);
 
@@ -55,8 +54,11 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
           selected: true,
         }));
         setScannedItems(items);
-        setIsSimulation(data.platform === "simulation");
-        setScanMessage(data.message || `Successfully scanned ${items.length} items!`);
+        setScanMessage(
+          items.length === 1
+            ? "Found 1 launchable item."
+            : `Found ${items.length} launchable items.`,
+        );
       }
     } catch (err: any) {
       console.error(err);
@@ -197,20 +199,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
           {/* Info message */}
           {scanMessage && (
             <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300">
-              {isSimulation ? (
-                <div className="space-y-1.5">
-                  <p className="font-bold flex items-center gap-1 text-white">
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400 animate-pulse" />
-                    Sandbox Preview Mode Active
-                  </p>
-                  <p className="leading-relaxed text-neutral-400 text-[11px]">
-                    You are in the cloud preview environment, so we have simulated scanning your path to show how the shortcut-stripper automatically reads real executable details. 
-                    <strong> Download this app locally</strong> to run natively on your Windows PC!
-                  </p>
-                </div>
-              ) : (
-                <p>{scanMessage}</p>
-              )}
+              <p>{scanMessage}</p>
             </div>
           )}
 

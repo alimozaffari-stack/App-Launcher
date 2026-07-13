@@ -13,7 +13,7 @@ interface ShortcutCardProps {
   onLaunch: (shortcut: Shortcut) => void | Promise<void>;
   onToggleFavorite?: (id: string) => void;
   viewMode?: "grid" | "list";
-  sortMode?: "manual" | "alphabetical";
+  sortMode?: "manual" | "alphabetical" | "date";
   isCompact?: boolean;
 }
 
@@ -49,7 +49,10 @@ export default function ShortcutCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: shortcut.id });
+  } = useSortable({
+    id: shortcut.id,
+    disabled: isCompact || sortMode !== "manual",
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -59,6 +62,10 @@ export default function ShortcutCard({
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (/["\r\n]/.test(shortcut.execPath)) {
+      alert("This target contains characters that cannot be represented safely in a Windows command.");
+      return;
+    }
     const cmd = `start "" "${shortcut.execPath}"`;
     navigator.clipboard.writeText(cmd);
     setCopied(true);
@@ -67,6 +74,10 @@ export default function ShortcutCard({
 
   const handleDownloadBat = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (/["\r\n]/.test(shortcut.execPath)) {
+      alert("This target contains characters that cannot be represented safely in a batch file.");
+      return;
+    }
     const content = `@echo off\nstart "" "${shortcut.execPath}"\nexit`;
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);

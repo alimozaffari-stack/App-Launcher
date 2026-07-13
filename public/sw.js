@@ -1,64 +1,56 @@
-const CACHE_NAME = "launcher-storefront-v1";
-const ASSETS = [
-  "/",
-  "/index.html",
-  "/src/main.tsx",
-  "/src/App.tsx",
-  "/src/index.css"
-];
+const CACHE_NAME = "app-launcher-v2";
+const PRECACHE = ["/", "/index.html", "/manifest.json", "/icon.svg"];
 
-self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS).catch((err) => {
-        console.warn("Asset caching skipped during SW install:", err);
-      });
-    })
-  );
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE)));
   self.skipWaiting();
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
-        })
-      );
-    })
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
+      ),
   );
   self.clients.claim();
 });
 
-self.addEventListener("fetch", (e) => {
-  // Only handle GET requests and local/app assets
-  if (e.request.method !== "GET" || !e.request.url.startsWith(self.location.origin)) {
+self.addEventListener("fetch", (event) => {
+  const requestUrl = new URL(event.request.url);
+  if (
+    event.request.method !== "GET" ||
+    requestUrl.origin !== self.location.origin ||
+    requestUrl.pathname.startsWith("/api/")
+  ) {
     return;
   }
-  e.respondWith(
-    caches.match(e.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Return cache but update in background
-        fetch(e.request).then((networkResponse) => {
-          if (networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(e.request, networkResponse));
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+          return response;
+        })
+        .catch(() => caches.match("/")),
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then(
+      (cached) =>
+        cached ||
+        fetch(event.request).then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           }
-        }).catch(() => {});
-        return cachedResponse;
-      }
-      return fetch(e.request).then((response) => {
-        if (response.status === 200) {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(e.request, responseClone));
-        }
-        return response;
-      }).catch(() => {
-        // Offline fallback for index.html
-        return caches.match("/");
-      });
-    })
+          return response;
+        }),
+    ),
   );
 });
