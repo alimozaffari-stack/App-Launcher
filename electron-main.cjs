@@ -15,6 +15,7 @@ let backendServer = null;
 let backendUrl = null;
 let mainWindow = null;
 let recoveredStorage = {};
+let storageRecoveryInProgress = false;
 
 async function startExpressServer() {
   process.env.APP_LAUNCHER_EMBEDDED = "1";
@@ -251,7 +252,15 @@ if (!gotTheLock) {
   app.whenReady()
     .then(async () => {
       await startExpressServer();
-      recoveredStorage = await recoverLegacyStorage();
+      storageRecoveryInProgress = true;
+      try {
+        recoveredStorage = await recoverLegacyStorage();
+      } catch (error) {
+        recoveredStorage = {};
+        console.warn("Legacy storage recovery was skipped:", error);
+      } finally {
+        storageRecoveryInProgress = false;
+      }
       createWindow();
 
       app.on("activate", () => {
@@ -271,6 +280,7 @@ if (!gotTheLock) {
 }
 
 app.on("window-all-closed", () => {
+  if (storageRecoveryInProgress) return;
   if (process.platform !== "darwin") app.quit();
 });
 

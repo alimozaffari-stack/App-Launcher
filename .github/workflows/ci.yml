@@ -21,6 +21,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - name: Smoke-test desktop startup
+        shell: pwsh
+        run: |
+          $stdout = Join-Path $env:RUNNER_TEMP "app-launcher-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "app-launcher-stderr.log"
+          $process = Start-Process `
+            -FilePath ".\node_modules\electron\dist\electron.exe" `
+            -ArgumentList "." `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+          try {
+            Start-Sleep -Seconds 8
+            if ($process.HasExited) {
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw "Electron exited during the startup smoke test."
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
       - run: npm run desktop:build
       - uses: actions/upload-artifact@v4
         with:
