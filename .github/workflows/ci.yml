@@ -21,14 +21,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run desktop:build
       - name: Smoke-test desktop startup
         shell: pwsh
         run: |
           $stdout = Join-Path $env:RUNNER_TEMP "app-launcher-stdout.log"
           $stderr = Join-Path $env:RUNNER_TEMP "app-launcher-stderr.log"
+          $executable = Join-Path $PWD "dist-desktop\win-unpacked\App Launcher.exe"
+          if (-not (Test-Path -LiteralPath $executable)) {
+            throw "The packaged App Launcher executable was not found."
+          }
           $process = Start-Process `
-            -FilePath ".\node_modules\electron\dist\electron.exe" `
-            -ArgumentList "." `
+            -FilePath $executable `
             -PassThru `
             -RedirectStandardOutput $stdout `
             -RedirectStandardError $stderr
@@ -44,7 +48,6 @@ jobs:
               Stop-Process -Id $process.Id -Force
             }
           }
-      - run: npm run desktop:build
       - uses: actions/upload-artifact@v4
         with:
           name: App-Launcher-Windows
