@@ -228,23 +228,127 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
     const script = `
       Add-Type -AssemblyName System.Drawing
+      Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class LauncherHighResolutionIcons {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern uint PrivateExtractIcons(
+    string szFileName,
+    int nIconIndex,
+    int cxIcon,
+    int cyIcon,
+    IntPtr[] phicon,
+    uint[] piconid,
+    uint nIcons,
+    uint flags
+  );
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool DestroyIcon(IntPtr hIcon);
+}
+'@
+
+      function Convert-LauncherIconToBase64([System.Drawing.Icon] $icon) {
+        $sourceBitmap = $icon.ToBitmap()
+        $bitmap = [System.Drawing.Bitmap]::new(128, 128, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+          $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+          $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+          $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+          $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+          $graphics.DrawImage($sourceBitmap, 0, 0, 128, 128)
+          $stream = New-Object System.IO.MemoryStream
+          try {
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+            return [Convert]::ToBase64String($stream.ToArray())
+          } finally {
+            $stream.Dispose()
+          }
+        } finally {
+          $graphics.Dispose()
+          $bitmap.Dispose()
+          $sourceBitmap.Dispose()
+        }
+      }
+
+      function Get-LauncherHighResolutionIcon([string] $source, [int] $defaultIndex = 0) {
+        $icon = $null
+        $iconHandle = [IntPtr]::Zero
+        try {
+          if ([string]::IsNullOrWhiteSpace($source)) { return $null }
+          $expandedSource = [Environment]::ExpandEnvironmentVariables($source.Trim())
+          $iconIndex = $defaultIndex
+          if ($expandedSource -match '^\"?(.*?)\"?,\\s*(-?\\d+)$') {
+            $expandedSource = $Matches[1]
+            $iconIndex = [int] $Matches[2]
+          }
+          $expandedSource = $expandedSource.Trim().Trim('"')
+          if (-not [System.IO.File]::Exists($expandedSource)) { return $null }
+
+          $handles = New-Object IntPtr[] 1
+          $iconIds = New-Object UInt32[] 1
+          $count = [LauncherHighResolutionIcons]::PrivateExtractIcons(
+            $expandedSource, $iconIndex, 256, 256, $handles, $iconIds, 1, 0
+          )
+          if ($count -gt 0 -and $handles[0] -ne [IntPtr]::Zero) {
+            $iconHandle = $handles[0]
+            $icon = [System.Drawing.Icon]::FromHandle($iconHandle).Clone()
+            return Convert-LauncherIconToBase64 $icon
+          }
+          return $null
+        } catch {
+          return $null
+        } finally {
+          if ($null -ne $icon) { $icon.Dispose() }
+          if ($iconHandle -ne [IntPtr]::Zero) {
+            [void] [LauncherHighResolutionIcons]::DestroyIcon($iconHandle)
+          }
+        }
+      }
+
       $target = [Environment]::ExpandEnvironmentVariables($env:APP_LAUNCHER_TARGET)
       if (-not [System.IO.File]::Exists($target)) { throw "File not found." }
-      $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($target)
-      if ($null -eq $icon) { throw "No associated icon." }
-      try {
-        $bitmap = $icon.ToBitmap()
-        $stream = New-Object System.IO.MemoryStream
-        try {
-          $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-          [Convert]::ToBase64String($stream.ToArray())
-        } finally {
-          $stream.Dispose()
-          $bitmap.Dispose()
+
+      $iconSource = $target
+      $fallbackSource = $target
+      $extension = [System.IO.Path]::GetExtension($target)
+      if ($extension -ieq ".lnk") {
+        $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($target)
+        if (-not [string]::IsNullOrWhiteSpace($shortcut.IconLocation)) {
+          $iconSource = $shortcut.IconLocation
+        } elseif (-not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+          $iconSource = $shortcut.TargetPath
         }
-      } finally {
-        $icon.Dispose()
+        if (-not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+          $fallbackSource = $shortcut.TargetPath
+        }
+      } elseif ($extension -ieq ".url") {
+        $urlLines = @(Get-Content -LiteralPath $target -ErrorAction SilentlyContinue)
+        $iconFile = ($urlLines | Where-Object { $_ -like "IconFile=*" } | Select-Object -First 1) -replace '^IconFile=', ''
+        $iconIndex = ($urlLines | Where-Object { $_ -like "IconIndex=*" } | Select-Object -First 1) -replace '^IconIndex=', ''
+        if (-not [string]::IsNullOrWhiteSpace($iconFile)) {
+          $iconSource = if ([string]::IsNullOrWhiteSpace($iconIndex)) { $iconFile } else { "$iconFile,$iconIndex" }
+        }
       }
+
+      $base64 = Get-LauncherHighResolutionIcon $iconSource
+      if ([string]::IsNullOrWhiteSpace($base64) -and $fallbackSource -ne $iconSource) {
+        $base64 = Get-LauncherHighResolutionIcon $fallbackSource
+      }
+      if ([string]::IsNullOrWhiteSpace($base64)) {
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($fallbackSource)
+        if ($null -eq $icon) { throw "No associated icon." }
+        try {
+          $base64 = Convert-LauncherIconToBase64 $icon
+        } finally {
+          $icon.Dispose()
+        }
+      }
+      $base64
     `;
 
     try {
@@ -280,6 +384,18 @@ using System;
 using System.Runtime.InteropServices;
 
 public static class LauncherShellIcons {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern uint PrivateExtractIcons(
+    string szFileName,
+    int nIconIndex,
+    int cxIcon,
+    int cyIcon,
+    IntPtr[] phicon,
+    uint[] piconid,
+    uint nIcons,
+    uint flags
+  );
+
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   public struct SHFILEINFO {
     public IntPtr hIcon;
@@ -307,8 +423,15 @@ public static class LauncherShellIcons {
 '@
 
       function Convert-LauncherIconToDataUrl([System.Drawing.Icon] $icon) {
-        $bitmap = $icon.ToBitmap()
+        $sourceBitmap = $icon.ToBitmap()
+        $bitmap = [System.Drawing.Bitmap]::new(128, 128, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
         try {
+          $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+          $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+          $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+          $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+          $graphics.DrawImage($sourceBitmap, 0, 0, 128, 128)
           $stream = New-Object System.IO.MemoryStream
           try {
             $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -317,28 +440,44 @@ public static class LauncherShellIcons {
             $stream.Dispose()
           }
         } finally {
+          $graphics.Dispose()
           $bitmap.Dispose()
+          $sourceBitmap.Dispose()
         }
       }
 
       function Get-LauncherIconDataUrl([string] $source) {
+        $icon = $null
+        $iconHandle = [IntPtr]::Zero
         try {
           if ([string]::IsNullOrWhiteSpace($source)) { return $null }
-          $expandedSource = [Environment]::ExpandEnvironmentVariables($source.Trim().Trim('"'))
-          if ($expandedSource -match '^(.*),\\s*-?\\d+$') {
-            $expandedSource = $Matches[1].Trim().Trim('"')
+          $expandedSource = [Environment]::ExpandEnvironmentVariables($source.Trim())
+          $iconIndex = 0
+          if ($expandedSource -match '^\"?(.*?)\"?,\\s*(-?\\d+)$') {
+            $expandedSource = $Matches[1]
+            $iconIndex = [int] $Matches[2]
           }
+          $expandedSource = $expandedSource.Trim().Trim('"')
           if (-not [System.IO.File]::Exists($expandedSource)) { return $null }
 
-          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expandedSource)
-          if ($null -eq $icon) { return $null }
-          try {
+          $handles = New-Object IntPtr[] 1
+          $iconIds = New-Object UInt32[] 1
+          $count = [LauncherShellIcons]::PrivateExtractIcons(
+            $expandedSource, $iconIndex, 256, 256, $handles, $iconIds, 1, 0
+          )
+          if ($count -gt 0 -and $handles[0] -ne [IntPtr]::Zero) {
+            $iconHandle = $handles[0]
+            $icon = [System.Drawing.Icon]::FromHandle($iconHandle).Clone()
             return Convert-LauncherIconToDataUrl $icon
-          } finally {
-            $icon.Dispose()
           }
+          return $null
         } catch {
           return $null
+        } finally {
+          if ($null -ne $icon) { $icon.Dispose() }
+          if ($iconHandle -ne [IntPtr]::Zero) {
+            [void] [LauncherShellIcons]::DestroyIcon($iconHandle)
+          }
         }
       }
 
@@ -428,11 +567,12 @@ public static class LauncherShellIcons {
             $urlLines = @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)
             $urlValue = ($urlLines | Where-Object { $_ -like "URL=*" } | Select-Object -First 1) -replace '^URL=', ''
             $iconValue = ($urlLines | Where-Object { $_ -like "IconFile=*" } | Select-Object -First 1) -replace '^IconFile=', ''
+            $iconIndexValue = ($urlLines | Where-Object { $_ -like "IconIndex=*" } | Select-Object -First 1) -replace '^IconIndex=', ''
             if (-not [string]::IsNullOrWhiteSpace($urlValue)) {
               $description = $urlValue
             }
             if (-not [string]::IsNullOrWhiteSpace($iconValue)) {
-              $iconSource = $iconValue
+              $iconSource = if ([string]::IsNullOrWhiteSpace($iconIndexValue)) { $iconValue } else { "$iconValue,$iconIndexValue" }
             }
           } elseif ($file.Extension -ieq ".exe") {
             $description = "Direct executable launcher."

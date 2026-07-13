@@ -25,6 +25,7 @@ import {
   ArrowDownAZ,
   ListChecks,
   SearchCheck,
+  ImageUp,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -93,6 +94,10 @@ export default function App() {
   const [hasDuplicateBackup, setHasDuplicateBackup] = useState(
     () => Boolean(sessionStorage.getItem(DUPLICATE_BACKUP_KEY)),
   );
+  const [iconRefreshProgress, setIconRefreshProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -212,6 +217,69 @@ export default function App() {
     } catch (error) {
       console.error("Could not restore duplicate-cleanup backup:", error);
       alert("The last duplicate cleanup could not be restored.");
+    }
+  };
+
+  const handleRefreshShortcutIcons = async () => {
+    const candidates = shortcuts.filter((shortcut) =>
+      /(^[a-z]:[\\/]|^\\\\|^%[^%]+%|\.(exe|lnk|url|appref-ms)$)/i.test(
+        shortcut.execPath.trim(),
+      ),
+    );
+    if (
+      candidates.length === 0 ||
+      !confirm(
+        `Re-extract ${candidates.length} local ${candidates.length === 1 ? "icon" : "icons"} at high quality? This is a one-time operation and may take a little while.`,
+      )
+    ) return;
+
+    setIconRefreshProgress({ completed: 0, total: candidates.length });
+    const refreshedIcons = new Map<string, string>();
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < candidates.length) {
+        const shortcut = candidates[nextIndex];
+        nextIndex += 1;
+        try {
+          const response = await fetch("/api/extract-icon", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ execPath: shortcut.execPath }),
+          });
+          if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.iconUrl) {
+              refreshedIcons.set(shortcut.id, result.iconUrl);
+            }
+          }
+        } catch (error) {
+          console.warn(`Could not refresh the icon for ${shortcut.name}:`, error);
+        } finally {
+          setIconRefreshProgress((current) =>
+            current ? { ...current, completed: current.completed + 1 } : current,
+          );
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(2, candidates.length) }, () => worker()),
+    );
+    const updated = shortcuts.map((shortcut) => {
+      const iconUrl = refreshedIcons.get(shortcut.id);
+      return iconUrl ? { ...shortcut, iconUrl } : shortcut;
+    });
+    try {
+      localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      setShortcuts(updated);
+      alert(
+        `Updated ${refreshedIcons.size} of ${candidates.length} local ${candidates.length === 1 ? "icon" : "icons"}.`,
+      );
+    } catch (error) {
+      console.error("Could not store refreshed icons:", error);
+      alert("The sharper icons could not be saved because local storage is full. No icons were changed.");
+    } finally {
+      setIconRefreshProgress(null);
     }
   };
 
@@ -954,6 +1022,24 @@ export default function App() {
             </div>
 
             {/* Add Shortcut primary button */}
+            {window.appLauncherDesktop && (
+              <button
+                onClick={() => void handleRefreshShortcutIcons()}
+                disabled={Boolean(iconRefreshProgress) || shortcuts.length === 0}
+                className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-[11px] font-semibold text-neutral-300 hover:bg-neutral-900 active:scale-95 transition-all shadow-md disabled:opacity-50"
+                title="Re-extract existing Windows icons from their highest-quality resources"
+              >
+                {iconRefreshProgress ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
+                ) : (
+                  <ImageUp className="h-3.5 w-3.5 text-amber-400" />
+                )}
+                {iconRefreshProgress
+                  ? `${iconRefreshProgress.completed}/${iconRefreshProgress.total}`
+                  : "Sharpen icons"}
+              </button>
+            )}
+
             {window.appLauncherDesktop && (
               <button
                 onClick={() => setShowMemoryDiagnostics(true)}

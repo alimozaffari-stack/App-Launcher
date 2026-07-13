@@ -13,6 +13,13 @@ const { startServer } = require("../dist/server.cjs");
 
 let running;
 
+function readPngDimensions(dataUrl) {
+  const encoded = String(dataUrl || "").split(",", 2)[1] || "";
+  const png = Buffer.from(encoded, "base64");
+  assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
+
 before(async () => {
   running = await startServer({
     port: 0,
@@ -87,6 +94,21 @@ test("keeps the optional AI SDK out of the cold-start server bundle", async () =
 });
 
 test(
+  "extracts a high-DPI Windows icon master",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const response = await fetch(`${running.url}/api/extract-icon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ execPath: process.execPath }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.deepEqual(readPngDimensions(result.iconUrl), { width: 128, height: 128 });
+  },
+);
+
+test(
   "scans nested Windows launchers and returns their extracted icons",
   { skip: process.platform !== "win32" },
   async () => {
@@ -119,6 +141,13 @@ test(
       for (const shortcut of result.shortcuts) {
         assert.match(shortcut.iconUrl || "", /^data:image\/png;base64,/);
       }
+      const executableShortcut = result.shortcuts.find(
+        (shortcut) => shortcut.name === "Fixture App",
+      );
+      assert.deepEqual(readPngDimensions(executableShortcut?.iconUrl), {
+        width: 128,
+        height: 128,
+      });
     } finally {
       await rm(fixtureRoot, { force: true, recursive: true });
     }

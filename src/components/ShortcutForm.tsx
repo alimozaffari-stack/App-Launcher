@@ -58,8 +58,8 @@ export default function ShortcutForm({
     }
   }, [initialShortcut, categories]);
 
-  // Resize uploaded artwork before storing it in localStorage. Full-size
-  // photographs can otherwise exhaust the browser storage quota quickly.
+  // Keep a sharp 128 px master for high-DPI card rendering while bounding
+  // localStorage and decoded-image memory use.
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -80,6 +80,8 @@ export default function ShortcutForm({
         canvas.height = Math.max(1, Math.round(image.height * scale));
         const context = canvas.getContext("2d");
         if (!context) throw new Error("Canvas is unavailable.");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
         setIconUrl(canvas.toDataURL("image/png"));
       } catch (error) {
