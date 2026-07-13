@@ -10,6 +10,15 @@ export interface Shortcut {
   order?: number;     // Order for drag-and-drop manual sorting
   isFavorite?: boolean; // Star/pinned status
   lastLaunchedAt?: number; // Last launched timestamp for recents
+  workspaceTags?: string[]; // Explicit nominated-workspace memberships
+}
+
+export interface TemporaryFolder {
+  id: string;
+  name: string;
+  path: string;
+  workspace: string;
+  createdAt: number;
 }
 
 export interface SuggestionResponse {

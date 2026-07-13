@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Shortcut } from "./types";
+import { Shortcut, TemporaryFolder } from "./types";
 import {
   Play,
   Plus,
@@ -44,6 +44,16 @@ import ShortcutCard from "./components/ShortcutCard";
 import ShortcutForm from "./components/ShortcutForm";
 import EmptyState from "./components/EmptyState";
 import FolderScanModal from "./components/FolderScanModal";
+import NominatedWorkspaceDropZone from "./components/NominatedWorkspaceDropZone";
+import TemporaryFolderCard from "./components/TemporaryFolderCard";
+import {
+  NOMINATED_CARD_PREFIX,
+  addShortcutToWorkspace,
+  isNominatedDropTarget,
+  isShortcutInWorkspace,
+  readTemporaryFolders,
+  removeShortcutFromWorkspace,
+} from "./workspace.js";
 
 interface CategoryDoc {
   id: string;
@@ -87,6 +97,9 @@ export default function App() {
   const [nominatedCategory, setNominatedCategory] = useState<string>(() => {
     return localStorage.getItem("launcher_nominated_category") || "Office";
   });
+  const [temporaryFolders, setTemporaryFolders] = useState<TemporaryFolder[]>(() =>
+    readTemporaryFolders(sessionStorage.getItem("launcher_temporary_folders")),
+  );
 
   // Sort mode: "manual", "alphabetical", or "date"
   const [sortMode, setSortMode] = useState<"manual" | "alphabetical" | "date">(() => {
@@ -104,6 +117,10 @@ export default function App() {
     setShortcuts(updated);
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
   };
+
+  useEffect(() => {
+    sessionStorage.setItem("launcher_temporary_folders", JSON.stringify(temporaryFolders));
+  }, [temporaryFolders]);
 
   // Listen for PWA Install Prompt
   useEffect(() => {
@@ -358,6 +375,7 @@ export default function App() {
             tags: data.tags,
             description: data.description,
             iconUrl: data.iconUrl || undefined,
+            workspaceTags: data.workspaceTags ?? s.workspaceTags,
           };
         }
         return s;
@@ -372,6 +390,7 @@ export default function App() {
         tags: data.tags,
         description: data.description,
         iconUrl: data.iconUrl || undefined,
+        workspaceTags: data.workspaceTags,
         createdAt: Date.now(),
         order: -1,
       };
@@ -384,6 +403,71 @@ export default function App() {
     }
     setShortcuts(updated);
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+  };
+
+  const handleAddShortcutToWorkspace = (id: string) => {
+    setShortcuts((current) => {
+      const updated = addShortcutToWorkspace(current, id, nominatedCategory);
+      if (updated !== current) {
+        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveShortcutFromWorkspace = (id: string) => {
+    setShortcuts((current) => {
+      const updated = removeShortcutFromWorkspace(current, id, nominatedCategory);
+      if (updated !== current) {
+        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleChooseTemporaryFolder = async () => {
+    if (!window.appLauncherDesktop?.selectFolder) {
+      alert("Temporary folders can be selected in the installed desktop application.");
+      return;
+    }
+
+    const selected = await window.appLauncherDesktop.selectFolder();
+    if (!selected) return;
+
+    setTemporaryFolders((current) => {
+      const alreadyAdded = current.some(
+        (folder) =>
+          folder.workspace === nominatedCategory &&
+          folder.path.toLowerCase() === selected.path.toLowerCase(),
+      );
+      if (alreadyAdded) return current;
+      return [
+        {
+          id: `temp-folder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: selected.name,
+          path: selected.path,
+          workspace: nominatedCategory,
+          createdAt: Date.now(),
+        },
+        ...current,
+      ];
+    });
+  };
+
+  const handleRemoveTemporaryFolder = (id: string) => {
+    setTemporaryFolders((current) => current.filter((folder) => folder.id !== id));
+  };
+
+  const handlePinTemporaryFolder = async (folder: TemporaryFolder) => {
+    await handleSaveShortcut({
+      name: folder.name,
+      execPath: folder.path,
+      category: folder.workspace,
+      tags: ["Folder", "Workspace"],
+      description: `Workspace folder: ${folder.path}`,
+      workspaceTags: [folder.workspace],
+    });
+    handleRemoveTemporaryFolder(folder.id);
   };
 
   // Sensors configuration for dnd-kit
@@ -401,11 +485,19 @@ export default function App() {
   // Handle manual drag and drop sorting
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (!over) return;
+
+    const activeId = String(active.id);
+    if (isNominatedDropTarget(over.id)) {
+      handleAddShortcutToWorkspace(activeId);
+      return;
+    }
+
+    if (sortMode !== "manual" || active.id === over.id) return;
 
     setShortcuts((prevShortcuts) => {
-      const activeIndex = prevShortcuts.findIndex((s) => s.id === active.id);
-      const overIndex = prevShortcuts.findIndex((s) => s.id === over.id);
+      const activeIndex = prevShortcuts.findIndex((s) => s.id === activeId);
+      const overIndex = prevShortcuts.findIndex((s) => s.id === String(over.id));
 
       if (activeIndex === -1 || overIndex === -1) return prevShortcuts;
 
@@ -565,6 +657,17 @@ export default function App() {
     }
   };
 
+  const handleLaunchTemporaryFolder = (folder: TemporaryFolder) => {
+    void handleLaunch({
+      id: folder.id,
+      name: folder.name,
+      execPath: folder.path,
+      category: folder.workspace,
+      tags: ["Temporary", "Folder"],
+      createdAt: folder.createdAt,
+    });
+  };
+
   const copyLaunchCommand = (pathStr: string) => {
     if (/["\r\n]/.test(pathStr)) {
       alert("This target contains characters that cannot be represented safely in a Windows command.");
@@ -621,7 +724,10 @@ export default function App() {
         !normalizedQuery ||
         shortcut.name.toLowerCase().includes(normalizedQuery) ||
         shortcut.category.toLowerCase().includes(normalizedQuery) ||
-        shortcut.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery));
+        (shortcut.tags || []).some((tag) => tag.toLowerCase().includes(normalizedQuery)) ||
+        (shortcut.workspaceTags || []).some((tag) =>
+          tag.toLowerCase().includes(normalizedQuery),
+        );
       const matchesCategory =
         selectedCategory === "All" || shortcut.category === selectedCategory;
       return matchesSearch && matchesCategory;
@@ -631,20 +737,30 @@ export default function App() {
   const categoryNamesList = categories.map((c) => c.name);
 
   const favoriteItems = displayShortcuts.filter((s) => s.isFavorite);
-  const nominatedItems = displayShortcuts.filter((s) => s.category === nominatedCategory);
+  const nominatedItems = displayShortcuts.filter((s) =>
+    isShortcutInWorkspace(s, nominatedCategory),
+  );
+  const currentTemporaryFolders = temporaryFolders.filter(
+    (folder) => folder.workspace === nominatedCategory,
+  );
   const lastUsedItems = [...shortcuts]
     .filter((s) => s.lastLaunchedAt !== undefined && s.lastLaunchedAt > 0)
     .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
     .slice(0, 4);
 
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-amber-500/20 selection:text-amber-400 relative overflow-hidden"
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
     >
+      <div
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-amber-500/20 selection:text-amber-400 relative overflow-hidden"
+      >
       
       {/* File Drag and Drop Overlay */}
       <AnimatePresence>
@@ -918,7 +1034,7 @@ export default function App() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" id="dashboard-top-panels">
                   
                   {/* WINDOW 1: NOMINATED GROUP */}
-                  <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 flex flex-col gap-3 backdrop-blur-md shadow-sm" style={{ padding: "12px" }} id="panel-nominated">
+                  <NominatedWorkspaceDropZone workspaceName={nominatedCategory}>
                     <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
                       <div className="flex items-center gap-1.5">
                         <Bookmark className="h-4 w-4 text-amber-500 fill-amber-500/10" />
@@ -926,16 +1042,37 @@ export default function App() {
                           Nominated: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedCategory}</span>
                         </h2>
                       </div>
-                      <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
-                        {nominatedItems.length}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void handleChooseTemporaryFolder()}
+                          className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-semibold text-amber-400 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                          title={`Add a temporary folder to ${nominatedCategory}`}
+                        >
+                          <FolderPlus className="h-3 w-3" />
+                          Folder
+                        </button>
+                        <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
+                          {nominatedItems.length + currentTemporaryFolders.length}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex-1 overflow-y-auto max-h-[340px] scrollbar-thin scrollbar-thumb-neutral-800 pr-1">
-                      {nominatedItems.length > 0 ? (
+                      {nominatedItems.length > 0 || currentTemporaryFolders.length > 0 ? (
                         <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-2 gap-2" : "flex flex-col gap-1.5"}>
+                          {currentTemporaryFolders.map((folder) => (
+                            <TemporaryFolderCard
+                              key={folder.id}
+                              folder={folder}
+                              onLaunch={handleLaunchTemporaryFolder}
+                              onPin={(item) => void handlePinTemporaryFolder(item)}
+                              onRemove={handleRemoveTemporaryFolder}
+                            />
+                          ))}
                           {nominatedItems.map((shortcut) => (
                             <ShortcutCard
                               key={`nom-${shortcut.id}`}
+                              dndId={`${NOMINATED_CARD_PREFIX}${shortcut.id}`}
                               shortcut={shortcut}
                               viewMode={viewMode}
                               sortMode={sortMode}
@@ -947,6 +1084,14 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
+                              workspaceName={nominatedCategory}
+                              isInWorkspace={true}
+                              onRemoveFromWorkspace={
+                                shortcut.category !== nominatedCategory &&
+                                (shortcut.workspaceTags || []).includes(nominatedCategory)
+                                  ? handleRemoveShortcutFromWorkspace
+                                  : undefined
+                              }
                             />
                           ))}
                         </div>
@@ -954,12 +1099,12 @@ export default function App() {
                         <div className="h-full flex flex-col items-center justify-center text-center py-8">
                           <Bookmark className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
                           <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            No programs in <span className="text-neutral-400">{nominatedCategory}</span> yet. Choose another category above or add new items.
+                            Drag a shortcut here to nominate it in <span className="text-neutral-400">{nominatedCategory}</span>, or add a temporary folder.
                           </p>
                         </div>
                       )}
                     </div>
-                  </div>
+                  </NominatedWorkspaceDropZone>
 
                   {/* WINDOW 2: FAVOURITES */}
                   <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 p-4 flex flex-col gap-3 backdrop-blur-md shadow-sm" id="panel-favourites">
@@ -1180,12 +1325,7 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext
+                  <SortableContext
                       items={displayShortcuts.map((s) => s.id)}
                       strategy={rectSortingStrategy}
                     >
@@ -1208,12 +1348,14 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
+                              onAddToWorkspace={handleAddShortcutToWorkspace}
+                              workspaceName={nominatedCategory}
+                              isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
                             />
                           ))}
                         </AnimatePresence>
                       </div>
-                    </SortableContext>
-                  </DndContext>
+                  </SortableContext>
                 </motion.section>
               </>
             ) : (
@@ -1336,12 +1478,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
+                <SortableContext
                     items={filteredShortcuts.map((s) => s.id)}
                     strategy={rectSortingStrategy}
                   >
@@ -1364,12 +1501,14 @@ export default function App() {
                             onDelete={handleDeleteShortcut}
                             onLaunch={handleLaunch}
                             onToggleFavorite={handleToggleFavorite}
+                            onAddToWorkspace={handleAddShortcutToWorkspace}
+                            workspaceName={nominatedCategory}
+                            isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
                           />
                         ))}
                       </AnimatePresence>
                     </div>
-                  </SortableContext>
-                </DndContext>
+                </SortableContext>
               </div>
             )}
           </div>
@@ -1559,6 +1698,7 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-    </div>
+      </div>
+    </DndContext>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Shortcut } from "../types";
-import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star } from "lucide-react";
+import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star, BookmarkPlus, BookmarkMinus } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -12,6 +12,11 @@ interface ShortcutCardProps {
   onDelete: (id: string) => void | Promise<void>;
   onLaunch: (shortcut: Shortcut) => void | Promise<void>;
   onToggleFavorite?: (id: string) => void;
+  onAddToWorkspace?: (id: string) => void;
+  onRemoveFromWorkspace?: (id: string) => void;
+  workspaceName?: string;
+  isInWorkspace?: boolean;
+  dndId?: string;
   viewMode?: "grid" | "list";
   sortMode?: "manual" | "alphabetical" | "date";
   isCompact?: boolean;
@@ -23,6 +28,11 @@ export default function ShortcutCard({
   onDelete, 
   onLaunch, 
   onToggleFavorite, 
+  onAddToWorkspace,
+  onRemoveFromWorkspace,
+  workspaceName,
+  isInWorkspace = false,
+  dndId,
   viewMode = "grid", 
   sortMode = "manual",
   isCompact = false 
@@ -50,8 +60,8 @@ export default function ShortcutCard({
     transition,
     isDragging,
   } = useSortable({
-    id: shortcut.id,
-    disabled: isCompact || sortMode !== "manual",
+    id: dndId || shortcut.id,
+    disabled: isCompact,
   });
 
   const style: React.CSSProperties = {
@@ -155,6 +165,32 @@ export default function ShortcutCard({
             <Star className={`h-3.5 w-3.5 ${shortcut.isFavorite ? "fill-amber-400 text-amber-400" : "text-neutral-400"}`} />
             {shortcut.isFavorite ? "Remove Favorite" : "Add Favorite"}
           </button>
+          {onAddToWorkspace && !isInWorkspace && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setContextMenu(null);
+                onAddToWorkspace(shortcut.id);
+              }}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-neutral-800/80 hover:text-white transition-all text-left w-full"
+            >
+              <BookmarkPlus className="h-3.5 w-3.5 text-amber-400" />
+              Add to {workspaceName || "workspace"}
+            </button>
+          )}
+          {onRemoveFromWorkspace && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setContextMenu(null);
+                onRemoveFromWorkspace(shortcut.id);
+              }}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-neutral-800/80 hover:text-white transition-all text-left w-full"
+            >
+              <BookmarkMinus className="h-3.5 w-3.5 text-amber-400" />
+              Remove from {workspaceName || "workspace"}
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -218,16 +254,14 @@ export default function ShortcutCard({
           id={`shortcut-card-${shortcut.id}`}
         >
           {/* Drag Handle */}
-          {sortMode === "manual" && (
-            <div
-              {...attributes}
-              {...listeners}
-              className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors"
-              title="Drag to reorder"
-            >
-              <GripVertical className="h-3.5 w-3.5" />
-            </div>
-          )}
+          <div
+            {...attributes}
+            {...listeners}
+            className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors"
+            title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </div>
 
           {/* Shortcut Icon (Clickable to Launch!) */}
           <div className="shrink-0">
@@ -265,6 +299,11 @@ export default function ShortcutCard({
                 <span className="shrink-0 px-1 py-0.2 rounded bg-neutral-950 text-[8px] font-mono uppercase text-neutral-500 tracking-wider">
                   {shortcut.category}
                 </span>
+                {(shortcut.workspaceTags || []).length > 0 && (
+                  <span className="shrink-0 px-1 py-0.2 rounded bg-amber-500/10 text-[8px] font-mono uppercase text-amber-400 tracking-wider">
+                    Nominated
+                  </span>
+                )}
               </div>
               {shortcut.description && (
                 <p className="text-[9.5px] text-neutral-400 truncate mt-0.2 max-w-[180px]">
@@ -275,6 +314,18 @@ export default function ShortcutCard({
 
             {/* Quick Actions & Launch */}
             <div className="flex items-center gap-1.5 shrink-0 justify-end">
+              {onAddToWorkspace && !isInWorkspace && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddToWorkspace(shortcut.id);
+                  }}
+                  className="p-1 rounded text-neutral-500 hover:text-amber-400 hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                  title={`Add to ${workspaceName || "nominated workspace"}`}
+                >
+                  <BookmarkPlus className="h-3 w-3" />
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -346,6 +397,18 @@ export default function ShortcutCard({
         >
           {/* Action overlay inside card - visible on hover or if favorited */}
           <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-0.5">
+            {onRemoveFromWorkspace && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemoveFromWorkspace(shortcut.id);
+                }}
+                className="p-1 rounded text-neutral-500 hover:text-amber-400 hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                title={`Remove from ${workspaceName || "nominated workspace"}`}
+              >
+                <BookmarkMinus className="h-3 w-3" />
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -447,20 +510,28 @@ export default function ShortcutCard({
       >
         {/* Top Controls Header */}
         <div className="flex items-center justify-between gap-1 text-neutral-500 h-5 shrink-0 select-none">
-          {sortMode === "manual" ? (
-            <div
-              {...attributes}
-              {...listeners}
-              className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing transition-colors shrink-0"
-              title="Drag to reorder"
-            >
-              <GripVertical className="h-3.5 w-3.5" />
-            </div>
-          ) : (
-            <div />
-          )}
+          <div
+            {...attributes}
+            {...listeners}
+            className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing transition-colors shrink-0"
+            title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {onAddToWorkspace && !isInWorkspace && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddToWorkspace(shortcut.id);
+                }}
+                className="p-1 rounded text-neutral-500 hover:text-amber-400 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                title={`Add to ${workspaceName || "nominated workspace"}`}
+              >
+                <BookmarkPlus className="h-3 w-3" />
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -549,9 +620,19 @@ export default function ShortcutCard({
           </div>
 
           {/* Tags */}
-          {shortcut.tags && shortcut.tags.length > 0 && (
+          {((shortcut.workspaceTags || []).length > 0 || (shortcut.tags && shortcut.tags.length > 0)) && (
             <div className="flex flex-wrap gap-1">
-              {shortcut.tags.slice(0, 2).map((tag) => (
+              {(shortcut.workspaceTags || []).slice(0, 1).map((workspace) => (
+                <span
+                  key={`workspace-${workspace}`}
+                  className="inline-flex items-center gap-0.5 rounded border border-amber-500/15 bg-amber-500/10 px-1 py-0.2 text-[8px] font-medium text-amber-400"
+                  title={`Nominated workspace: ${workspace}`}
+                >
+                  <BookmarkPlus className="h-2 w-2" />
+                  {workspace}
+                </span>
+              ))}
+              {(shortcut.tags || []).slice(0, 2).map((tag) => (
                 <span
                   key={tag}
                   className="inline-flex items-center gap-0.5 rounded bg-neutral-950 px-1 py-0.2 text-[8px] font-medium text-neutral-400 border border-neutral-900"

@@ -120,6 +120,20 @@ async function recoverLegacyStorage() {
 }
 
 ipcMain.handle("app-launcher:get-recovered-storage", () => recoveredStorage);
+ipcMain.handle("app-launcher:select-folder", async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Add a temporary workspace folder",
+    buttonLabel: "Add folder",
+    properties: ["openDirectory", "dontAddToRecent"],
+  });
+  const selectedPath = result.canceled ? "" : result.filePaths[0];
+  if (!selectedPath) return null;
+  return {
+    name: path.basename(selectedPath) || selectedPath,
+    path: selectedPath,
+  };
+});
 
 function isSafeExternalUrl(rawUrl) {
   try {
