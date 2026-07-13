@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckSquare, Layers, Tags, X } from "lucide-react";
 
 export type BulkShortcutAction =
@@ -12,7 +12,7 @@ interface BulkEditPanelProps {
   onSelectVisible: () => void;
   onClearSelection: () => void;
   onDone: () => void;
-  onApply: (action: BulkShortcutAction) => void;
+  onApply: (action: BulkShortcutAction) => number;
 }
 
 export default function BulkEditPanel({
@@ -25,7 +25,26 @@ export default function BulkEditPanel({
   onApply,
 }: BulkEditPanelProps) {
   const [tagsInput, setTagsInput] = useState("");
-  const [group, setGroup] = useState(categories[0] || "");
+  const [group, setGroup] = useState("");
+  const [groupOperation, setGroupOperation] = useState<
+    "add-group" | "remove-group" | "set-primary-group"
+  >("add-group");
+  const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    if (!group || !categories.includes(group)) {
+      setGroup(categories[0] || "");
+    }
+  }, [categories, group]);
+
+  const applyAction = (action: BulkShortcutAction) => {
+    const changedCount = onApply(action);
+    setFeedback(
+      changedCount > 0
+        ? `Updated ${changedCount} selected ${changedCount === 1 ? "card" : "cards"}.`
+        : "No change was needed for the selected cards.",
+    );
+  };
 
   const parsedTags = Array.from(
     new Set<string>(
@@ -54,7 +73,7 @@ export default function BulkEditPanel({
             disabled={visibleCount === 0}
             className="rounded-lg border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-[10px] font-semibold text-neutral-300 hover:border-neutral-700 hover:text-white disabled:opacity-40"
           >
-            Select visible ({visibleCount})
+            Select all shown ({visibleCount})
           </button>
           <button
             type="button"
@@ -62,7 +81,7 @@ export default function BulkEditPanel({
             disabled={selectedCount === 0}
             className="rounded-lg border border-neutral-800 bg-neutral-950 px-2.5 py-1.5 text-[10px] font-semibold text-neutral-400 hover:text-white disabled:opacity-40"
           >
-            Clear
+            Deselect all
           </button>
           <button
             type="button"
@@ -94,7 +113,7 @@ export default function BulkEditPanel({
                 key={type}
                 type="button"
                 disabled={!canApply || parsedTags.length === 0}
-                onClick={() => onApply({ type, tags: parsedTags })}
+                onClick={() => applyAction({ type, tags: parsedTags })}
                 className="rounded-lg border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-[10px] font-semibold text-neutral-300 hover:border-amber-500/30 hover:text-amber-400 disabled:opacity-35"
               >
                 {type === "add-tags" ? "Add" : type === "remove-tags" ? "Remove" : "Replace all"}
@@ -108,47 +127,56 @@ export default function BulkEditPanel({
             <Layers className="h-3.5 w-3.5 text-amber-400" />
             Groups
           </div>
-          <select
-            value={group}
-            onChange={(event) => setGroup(event.target.value)}
-            className="w-full rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-[11px] text-white focus:border-amber-500 focus:outline-none"
-          >
-            {categories.map((category) => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              disabled={!canApply || !group}
-              onClick={() => onApply({ type: "add-group", group })}
-              className="rounded-lg border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-[10px] font-semibold text-neutral-300 hover:border-amber-500/30 hover:text-amber-400 disabled:opacity-35"
-            >
-              Add membership
-            </button>
-            <button
-              type="button"
-              disabled={!canApply || !group}
-              onClick={() => onApply({ type: "remove-group", group })}
-              className="rounded-lg border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-[10px] font-semibold text-neutral-300 hover:border-amber-500/30 hover:text-amber-400 disabled:opacity-35"
-              title="Primary membership is not removed"
-            >
-              Remove additional
-            </button>
-            <button
-              type="button"
-              disabled={!canApply || !group}
-              onClick={() => onApply({ type: "set-primary-group", group })}
-              className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[10px] font-semibold text-amber-400 hover:bg-amber-500/15 disabled:opacity-35"
-            >
-              Make primary
-            </button>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-neutral-500">Target group</span>
+              <select
+                value={group}
+                onChange={(event) => {
+                  setGroup(event.target.value);
+                  setFeedback("");
+                }}
+                className="w-full rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-[11px] text-white focus:border-amber-500 focus:outline-none"
+              >
+                {categories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-neutral-500">Operation</span>
+              <select
+                value={groupOperation}
+                onChange={(event) => {
+                  setGroupOperation(event.target.value as typeof groupOperation);
+                  setFeedback("");
+                }}
+                className="w-full rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-[11px] text-white focus:border-amber-500 focus:outline-none"
+              >
+                <option value="add-group">Add membership</option>
+                <option value="remove-group">Remove additional membership</option>
+                <option value="set-primary-group">Make primary group</option>
+              </select>
+            </label>
           </div>
+          <button
+            type="button"
+            disabled={!canApply || !group}
+            onClick={() => applyAction({ type: groupOperation, group })}
+            className="w-full rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[10px] font-bold text-amber-400 hover:bg-amber-500/15 disabled:opacity-35"
+          >
+            Apply group change to {selectedCount} selected
+          </button>
           <p className="text-[9px] leading-normal text-neutral-500">
-            Changing the primary group keeps the former primary as an additional membership.
+            Removing affects additional membership only. Making a group primary keeps the former primary as an additional membership.
           </p>
         </div>
       </div>
+      {feedback && (
+        <p className="mt-3 rounded-lg border border-neutral-800 bg-neutral-950/60 px-3 py-2 text-[10px] font-medium text-neutral-300" role="status">
+          {feedback}
+        </p>
+      )}
     </section>
   );
 }

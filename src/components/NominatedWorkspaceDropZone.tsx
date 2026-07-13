@@ -6,18 +6,23 @@ import { NOMINATED_WORKSPACE_DROP_ID } from "../workspace.js";
 interface NominatedWorkspaceDropZoneProps {
   children: ReactNode;
   workspaceName: string;
+  disabled?: boolean;
 }
 
 export default function NominatedWorkspaceDropZone({
   children,
   workspaceName,
+  disabled = false,
 }: NominatedWorkspaceDropZoneProps) {
-  const { isOver, setNodeRef } = useDroppable({ id: NOMINATED_WORKSPACE_DROP_ID });
+  const { isOver, setNodeRef } = useDroppable({
+    id: NOMINATED_WORKSPACE_DROP_ID,
+    disabled,
+  });
 
   return (
     <section
       ref={setNodeRef}
-      aria-label={`${workspaceName} nominated workspace drop area`}
+      aria-label={`${workspaceName} top workspace${disabled ? "" : " drop area"}`}
       className={`relative rounded-2xl border bg-neutral-950/15 flex flex-col gap-3 backdrop-blur-md shadow-sm transition-colors ${
         isOver
           ? "border-amber-400 bg-amber-500/10 ring-2 ring-amber-500/25"

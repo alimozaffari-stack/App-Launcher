@@ -403,117 +403,42 @@ export default function ShortcutCard({
 
   if (isCompact) {
     return (
-      <>
-        <motion.div
-          ref={setNodeRef}
-          style={style}
-          layout
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          whileHover={isDragging ? undefined : { y: -2, scale: 1.015 }}
-          transition={{ duration: 0.15 }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setContextMenu({ x: e.clientX, y: e.clientY });
-          }}
-          className={`group relative flex flex-col justify-center overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/40 p-2.5 backdrop-blur-md transition-all hover:border-neutral-700/80 hover:bg-neutral-900/70 hover:shadow-md ${
-            isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl" : ""
-          }`}
-          id={`shortcut-card-compact-${shortcut.id}`}
-        >
-          {/* Action overlay inside card - visible on hover or if favorited */}
-          <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-0.5">
-            {onRemoveFromWorkspace && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemoveFromWorkspace(shortcut.id);
-                }}
-                className="p-1 rounded text-neutral-500 hover:text-amber-400 hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
-                title={`Remove from ${workspaceName || "nominated workspace"}`}
-              >
-                <BookmarkMinus className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleFavorite?.(shortcut.id);
-              }}
-              className={`p-1 rounded transition-all ${
-                shortcut.isFavorite
-                  ? "text-amber-400 hover:scale-110 opacity-100"
-                  : "text-neutral-500 hover:text-amber-400 opacity-0 group-hover:opacity-100"
-              }`}
-              title={shortcut.isFavorite ? "Remove from Favourites" : "Add to Favourites"}
-            >
-              <Star className={`h-3 w-3 ${shortcut.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit(shortcut);
-              }}
-              className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100"
-              title="Edit Shortcut"
-            >
-              <Edit2 className="h-2.5 w-2.5" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(shortcut.id);
-              }}
-              className="p-1 rounded text-neutral-400 hover:text-red-400 hover:bg-red-950/30 transition-all opacity-0 group-hover:opacity-100"
-              title="Delete Shortcut"
-            >
-              <Trash2 className="h-2.5 w-2.5" />
-            </button>
-          </div>
-
-          {/* Compact Click-to-Launch Body */}
-          <div 
-            onClick={() => onLaunch(shortcut)}
-            className="flex items-center gap-2.5 flex-1 cursor-pointer select-none"
-          >
-            {/* Icon */}
-            <div className="shrink-0">
-              <div className="relative overflow-hidden rounded-lg border border-neutral-850 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-9 w-9 items-center justify-center transition-all duration-200 hover:border-amber-500/30 shadow-inner">
-                {shortcut.iconUrl ? (
-                  <img
-                    src={shortcut.iconUrl}
-                    alt={shortcut.name}
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-neutral-400">
-                    {isFolder ? <Folder className="h-4.5 w-4.5 text-amber-500/80" /> : <Terminal className="h-3.5 w-3.5" />}
-                  </div>
-                )}
-                {/* Overlay Play Indicator */}
-                <div className="absolute inset-0 bg-neutral-950/40 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity duration-150">
-                  <Play className="h-3 w-3 text-amber-400 fill-amber-400" />
-                </div>
-              </div>
-            </div>
-
-            {/* Title and Category */}
-            <div className="min-w-0 flex-1 pr-6 group-hover:pr-14 transition-all duration-150">
-              <h3 className="font-sans text-[11px] font-bold tracking-tight text-neutral-200 group-hover:text-white transition-colors leading-snug truncate" title={shortcut.name}>
-                {shortcut.name}
-              </h3>
-              <span className="inline-block mt-0.5 text-[8px] font-mono uppercase tracking-wider text-neutral-500 bg-neutral-950/60 px-1 py-0.2 rounded">
-                {shortcut.category}
-              </span>
-            </div>
-          </div>
-        </motion.div>
-        {renderContextMenu()}
-      </>
+      <motion.div
+        ref={setNodeRef}
+        style={style}
+        layout
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        whileHover={isDragging ? undefined : { y: -1, scale: 1.01 }}
+        transition={{ duration: 0.15 }}
+        onClick={() => onLaunch(shortcut)}
+        className={`group flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/40 p-2 transition-all hover:border-amber-500/30 hover:bg-neutral-900/70 ${
+          isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl" : ""
+        }`}
+        id={`shortcut-card-compact-${shortcut.id}`}
+        title={`Launch ${shortcut.name}`}
+      >
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950">
+          {shortcut.iconUrl ? (
+            <img
+              src={shortcut.iconUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              className="h-full w-full object-contain"
+            />
+          ) : isFolder ? (
+            <Folder className="h-4 w-4 text-amber-500/80" />
+          ) : (
+            <Terminal className="h-3.5 w-3.5 text-neutral-400" />
+          )}
+        </div>
+        <h3 className="min-w-0 flex-1 truncate text-[11px] font-bold tracking-tight text-neutral-200 group-hover:text-white" title={shortcut.name}>
+          {shortcut.name}
+        </h3>
+      </motion.div>
     );
   }
 

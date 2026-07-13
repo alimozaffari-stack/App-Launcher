@@ -67,6 +67,8 @@ const ShortcutForm = lazy(() => import("./components/ShortcutForm"));
 const DuplicateCleaner = lazy(() => import("./components/DuplicateCleaner"));
 
 const DUPLICATE_BACKUP_KEY = "launcher_duplicate_cleanup_backup";
+const NOMINATED_WORKSPACE_NONE = "__none__";
+const NOMINATED_WORKSPACE_ALL = "__all__";
 
 interface CategoryDoc {
   id: string;
@@ -159,13 +161,20 @@ export default function App() {
   };
 
   const handleApplyBulkAction = (action: BulkShortcutAction) => {
-    setShortcuts((current) => {
-      const updated = updateShortcutsInBulk(current, selectedShortcutIds, action);
-      if (updated !== current) {
-        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-      }
-      return updated;
-    });
+    const updated = updateShortcutsInBulk(shortcuts, selectedShortcutIds, action);
+    if (updated === shortcuts) return 0;
+    const changedCount = updated.reduce(
+      (count, shortcut, index) => count + (shortcut !== shortcuts[index] ? 1 : 0),
+      0,
+    );
+    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+    setShortcuts(updated);
+    return changedCount;
+  };
+
+  const handleSetNominatedWorkspace = (workspace: string) => {
+    setNominatedCategory(workspace);
+    localStorage.setItem("launcher_nominated_category", workspace);
   };
 
   const handleCleanExactDuplicates = (groups: DuplicateGroup[]) => {
@@ -286,6 +295,17 @@ export default function App() {
   useEffect(() => {
     sessionStorage.setItem("launcher_temporary_folders", JSON.stringify(temporaryFolders));
   }, [temporaryFolders]);
+
+  useEffect(() => {
+    if (
+      categories.length > 0 &&
+      nominatedCategory !== NOMINATED_WORKSPACE_NONE &&
+      nominatedCategory !== NOMINATED_WORKSPACE_ALL &&
+      !categories.some((category) => category.name === nominatedCategory)
+    ) {
+      handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE);
+    }
+  }, [categories, nominatedCategory]);
 
   // Listen for PWA Install Prompt
   useEffect(() => {
@@ -575,6 +595,10 @@ export default function App() {
   };
 
   const handleAddShortcutToWorkspace = (id: string) => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) return;
     setShortcuts((current) => {
       const updated = addShortcutToWorkspace(current, id, nominatedCategory);
       if (updated !== current) {
@@ -585,6 +609,10 @@ export default function App() {
   };
 
   const handleRemoveShortcutFromWorkspace = (id: string) => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) return;
     setShortcuts((current) => {
       const updated = removeShortcutFromWorkspace(current, id, nominatedCategory);
       if (updated !== current) {
@@ -595,6 +623,13 @@ export default function App() {
   };
 
   const handleChooseTemporaryFolder = async () => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) {
+      alert("Choose a specific top workspace before adding a temporary folder.");
+      return;
+    }
     if (!window.appLauncherDesktop?.selectFolder) {
       alert("Temporary folders can be selected in the installed desktop application.");
       return;
@@ -763,9 +798,7 @@ export default function App() {
         current.filter((folder) => folder.workspace !== categoryObj.name),
       );
       if (nominatedCategory === categoryObj.name) {
-        const fallbackNomination = updatedCats[0]?.name || "Others";
-        setNominatedCategory(fallbackNomination);
-        localStorage.setItem("launcher_nominated_category", fallbackNomination);
+        handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE);
       }
     }
   };
@@ -929,14 +962,31 @@ export default function App() {
   }, [displayShortcuts, searchQuery, selectedCategory]);
 
   const categoryNamesList = categories.map((c) => c.name);
+  const nominatedWorkspaceCategory =
+    nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? null
+      : nominatedCategory;
+  const nominatedWorkspaceLabel =
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? "All shortcuts"
+      : nominatedWorkspaceCategory || "None";
+  const hasNominatedWorkspace = nominatedCategory !== NOMINATED_WORKSPACE_NONE;
 
   const favoriteItems = displayShortcuts.filter((s) => s.isFavorite);
-  const nominatedItems = displayShortcuts.filter((s) =>
-    isShortcutInWorkspace(s, nominatedCategory),
-  );
-  const currentTemporaryFolders = temporaryFolders.filter(
-    (folder) => folder.workspace === nominatedCategory,
-  );
+  const nominatedItems =
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? displayShortcuts
+      : nominatedWorkspaceCategory
+        ? displayShortcuts.filter((shortcut) =>
+            isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+          )
+        : [];
+  const currentTemporaryFolders = nominatedWorkspaceCategory
+    ? temporaryFolders.filter(
+        (folder) => folder.workspace === nominatedWorkspaceCategory,
+      )
+    : [];
   const lastUsedItems = [...shortcuts]
     .filter((s) => s.lastLaunchedAt !== undefined && s.lastLaunchedAt > 0)
     .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
@@ -1225,27 +1275,41 @@ export default function App() {
               Bulk actions
             </button>
 
-          {/* Pin dropdown to nominate a category to the dashboard */}
+          {/* Controls only the optional top workspace; group pills filter cards below. */}
           <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors flex-1 xl:flex-none justify-between xl:justify-start h-[40px] self-start">
             <div className="flex items-center gap-1.5">
               <Bookmark className="h-3.5 w-3.5 text-amber-500 fill-amber-500/10" />
-              <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">PIN:</span>
+              <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">Top workspace:</span>
             </div>
             <select
               value={nominatedCategory}
-              onChange={(e) => {
-                setNominatedCategory(e.target.value);
-                localStorage.setItem("launcher_nominated_category", e.target.value);
-              }}
+              onChange={(e) => handleSetNominatedWorkspace(e.target.value)}
               className="bg-transparent border-none text-xs text-neutral-200 focus:outline-none cursor-pointer hover:text-white font-semibold pr-1"
-              title="Select a category/group to pin/nominate to your dashboard"
+              title="Choose what appears in the optional top workspace. Group filters control the full cards below."
             >
+              <option value={NOMINATED_WORKSPACE_NONE} className="bg-neutral-950 text-neutral-200">
+                None (hide)
+              </option>
+              <option value={NOMINATED_WORKSPACE_ALL} className="bg-neutral-950 text-neutral-200">
+                All shortcuts
+              </option>
               {categoryNamesList.map((catName) => (
                 <option key={catName} value={catName} className="bg-neutral-950 text-neutral-200">
                   {catName}
                 </option>
               ))}
             </select>
+            {nominatedCategory !== NOMINATED_WORKSPACE_NONE && (
+              <button
+                type="button"
+                onClick={() => handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE)}
+                className="rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-white"
+                title="Clear and hide the top workspace"
+                aria-label="Clear top workspace"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
           </div>
           </div>
         </div>
@@ -1305,27 +1369,31 @@ export default function App() {
             {selectedCategory === "All" && !searchQuery ? (
               <>
                 {/* Side-by-Side Three Windows with Fine Pale Frames */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" id="dashboard-top-panels">
+                <div className={`grid grid-cols-1 gap-5 ${hasNominatedWorkspace ? "lg:grid-cols-3" : "lg:grid-cols-2"}`} id="dashboard-top-panels">
                   
                   {/* WINDOW 1: NOMINATED GROUP */}
-                  <NominatedWorkspaceDropZone workspaceName={nominatedCategory}>
+                  {hasNominatedWorkspace && (
+                  <NominatedWorkspaceDropZone
+                    workspaceName={nominatedWorkspaceLabel}
+                    disabled={nominatedCategory === NOMINATED_WORKSPACE_ALL}
+                  >
                     <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
                       <div className="flex items-center gap-1.5">
                         <Bookmark className="h-4 w-4 text-amber-500 fill-amber-500/10" />
                         <h2 className="text-[11.5px] uppercase font-mono tracking-wider font-bold text-neutral-200">
-                          Nominated: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedCategory}</span>
+                          Top workspace: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedWorkspaceLabel}</span>
                         </h2>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button
+                        {nominatedWorkspaceCategory && <button
                           type="button"
                           onClick={() => void handleChooseTemporaryFolder()}
                           className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-semibold text-amber-400 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
-                          title={`Add a temporary folder to ${nominatedCategory}`}
+                          title={`Add a temporary folder to ${nominatedWorkspaceLabel}`}
                         >
                           <FolderPlus className="h-3 w-3" />
                           Folder
-                        </button>
+                        </button>}
                         <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
                           {nominatedItems.length + currentTemporaryFolders.length}
                         </span>
@@ -1358,11 +1426,12 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
-                              workspaceName={nominatedCategory}
+                              workspaceName={nominatedWorkspaceLabel}
                               isInWorkspace={true}
                               onRemoveFromWorkspace={
-                                shortcut.category !== nominatedCategory &&
-                                (shortcut.workspaceTags || []).includes(nominatedCategory)
+                                nominatedWorkspaceCategory &&
+                                shortcut.category !== nominatedWorkspaceCategory &&
+                                (shortcut.workspaceTags || []).includes(nominatedWorkspaceCategory)
                                   ? handleRemoveShortcutFromWorkspace
                                   : undefined
                               }
@@ -1373,12 +1442,13 @@ export default function App() {
                         <div className="h-full flex flex-col items-center justify-center text-center py-8">
                           <Bookmark className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
                           <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            Drag a shortcut here to nominate it in <span className="text-neutral-400">{nominatedCategory}</span>, or add a temporary folder.
+                            Drag a shortcut here to add it to <span className="text-neutral-400">{nominatedWorkspaceLabel}</span>, or add a temporary folder.
                           </p>
                         </div>
                       )}
                     </div>
                   </NominatedWorkspaceDropZone>
+                  )}
 
                   {/* WINDOW 2: FAVOURITES */}
                   <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 p-4 flex flex-col gap-3 backdrop-blur-md shadow-sm" id="panel-favourites">
@@ -1495,6 +1565,28 @@ export default function App() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      {isBulkMode && (
+                        <div className="flex items-center gap-1 rounded-lg border border-amber-500/25 bg-amber-500/5 p-0.5">
+                          <span className="px-1.5 text-[9px] font-semibold text-amber-400">
+                            {selectedShortcutIds.size} selected
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleSelectVisibleShortcuts}
+                            className="rounded px-2 py-1 text-[9px] font-bold text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedShortcutIds(new Set())}
+                            disabled={selectedShortcutIds.size === 0}
+                            className="rounded px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40"
+                          >
+                            Deselect
+                          </button>
+                        </div>
+                      )}
                       {/* Search Input */}
                       <div className="relative w-40 sm:w-48">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
@@ -1517,9 +1609,11 @@ export default function App() {
                       </div>
 
                       {/* Sort Style */}
-                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
+                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Sort cards. Drag order lets you rearrange them manually.">
+                        <span className="px-1.5 text-[8px] font-semibold uppercase tracking-wider text-neutral-600">Sort</span>
                         <button
                           type="button"
+                          title="Drag order: manually rearrange cards by dragging them"
                           onClick={() => {
                             setSortMode("manual");
                             localStorage.setItem("launcher_sort_mode", "manual");
@@ -1530,7 +1624,7 @@ export default function App() {
                               : "text-neutral-400 hover:text-white"
                           }`}
                         >
-                          Manual
+                          Drag order
                         </button>
                         <button
                           type="button"
@@ -1622,9 +1716,15 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
-                              onAddToWorkspace={handleAddShortcutToWorkspace}
-                              workspaceName={nominatedCategory}
-                              isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
+                              onAddToWorkspace={nominatedWorkspaceCategory ? handleAddShortcutToWorkspace : undefined}
+                              workspaceName={nominatedWorkspaceCategory || undefined}
+                              isInWorkspace={
+                                nominatedCategory === NOMINATED_WORKSPACE_ALL ||
+                                Boolean(
+                                  nominatedWorkspaceCategory &&
+                                  isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+                                )
+                              }
                               isSelectionMode={isBulkMode}
                               isSelected={selectedShortcutIds.has(shortcut.id)}
                               onSelectionToggle={handleSelectionToggle}
@@ -1650,6 +1750,28 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {isBulkMode && (
+                      <div className="flex items-center gap-1 rounded-lg border border-amber-500/25 bg-amber-500/5 p-0.5">
+                        <span className="px-1.5 text-[9px] font-semibold text-amber-400">
+                          {selectedShortcutIds.size} selected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleSelectVisibleShortcuts}
+                          className="rounded px-2 py-1 text-[9px] font-bold text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedShortcutIds(new Set())}
+                          disabled={selectedShortcutIds.size === 0}
+                          className="rounded px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40"
+                        >
+                          Deselect
+                        </button>
+                      </div>
+                    )}
                     {/* Search Input */}
                     <div className="relative w-40 sm:w-48">
                       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
@@ -1672,9 +1794,11 @@ export default function App() {
                     </div>
 
                     {/* Sort Style */}
-                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
+                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Sort cards. Drag order lets you rearrange them manually.">
+                      <span className="px-1.5 text-[8px] font-semibold uppercase tracking-wider text-neutral-600">Sort</span>
                       <button
                         type="button"
+                        title="Drag order: manually rearrange cards by dragging them"
                         onClick={() => {
                           setSortMode("manual");
                           localStorage.setItem("launcher_sort_mode", "manual");
@@ -1685,7 +1809,7 @@ export default function App() {
                             : "text-neutral-400 hover:text-white"
                         }`}
                       >
-                        Manual
+                        Drag order
                       </button>
                       <button
                         type="button"
@@ -1778,9 +1902,15 @@ export default function App() {
                             onDelete={handleDeleteShortcut}
                             onLaunch={handleLaunch}
                             onToggleFavorite={handleToggleFavorite}
-                            onAddToWorkspace={handleAddShortcutToWorkspace}
-                            workspaceName={nominatedCategory}
-                            isInWorkspace={isShortcutInWorkspace(shortcut, nominatedCategory)}
+                            onAddToWorkspace={nominatedWorkspaceCategory ? handleAddShortcutToWorkspace : undefined}
+                            workspaceName={nominatedWorkspaceCategory || undefined}
+                            isInWorkspace={
+                              nominatedCategory === NOMINATED_WORKSPACE_ALL ||
+                              Boolean(
+                                nominatedWorkspaceCategory &&
+                                isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+                              )
+                            }
                             isSelectionMode={isBulkMode}
                             isSelected={selectedShortcutIds.has(shortcut.id)}
                             onSelectionToggle={handleSelectionToggle}

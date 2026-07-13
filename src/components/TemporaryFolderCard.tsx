@@ -16,24 +16,19 @@ export default function TemporaryFolderCard({
   onRemove,
 }: TemporaryFolderCardProps) {
   return (
-    <div className="group relative flex items-center gap-2.5 rounded-xl border border-dashed border-amber-500/25 bg-amber-500/5 p-2.5 transition-colors hover:border-amber-500/50 hover:bg-amber-500/10">
+    <div className="group relative flex items-center gap-2 rounded-lg border border-dashed border-amber-500/25 bg-amber-500/5 p-2 transition-colors hover:border-amber-500/50 hover:bg-amber-500/10">
       <button
         type="button"
         onClick={() => onLaunch(folder)}
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left"
         title={`Open ${folder.path}`}
       >
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/20 bg-neutral-950 text-amber-400">
-          <FolderOpen className="h-4.5 w-4.5" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/20 bg-neutral-950 text-amber-400">
+          <FolderOpen className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[11px] font-bold text-neutral-200">{folder.name}</span>
-          <span className="block truncate text-[8px] font-mono uppercase tracking-wider text-amber-400/70">
-            Temporary folder
-          </span>
-        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-neutral-200">{folder.name}</span>
       </button>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         <button
           type="button"
           onClick={() => onPin(folder)}

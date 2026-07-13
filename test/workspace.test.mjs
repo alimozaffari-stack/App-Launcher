@@ -110,3 +110,26 @@ test("bulk primary-group changes preserve the former primary membership", () => 
   assert.deepEqual(promoted[1].workspaceTags, ["AI", "Research"]);
   assert.equal(isShortcutInWorkspace(promoted[1], "Research"), true);
 });
+
+test("bulk group actions remain usable across repeated operations", () => {
+  const selected = ["two"];
+  const added = updateShortcutsInBulk(shortcuts, selected, {
+    type: "add-group",
+    group: "Office",
+  });
+  assert.deepEqual(added[1].workspaceTags, ["Office"]);
+
+  const promoted = updateShortcutsInBulk(added, selected, {
+    type: "set-primary-group",
+    group: "Office",
+  });
+  assert.equal(promoted[1].category, "Office");
+  assert.deepEqual(promoted[1].workspaceTags, ["Research"]);
+
+  const removed = updateShortcutsInBulk(promoted, selected, {
+    type: "remove-group",
+    group: "Research",
+  });
+  assert.equal(removed[1].category, "Office");
+  assert.equal(removed[1].workspaceTags, undefined);
+});
