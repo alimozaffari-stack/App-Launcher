@@ -123,7 +123,7 @@ export default function EmptyState({ onAddClick, onImportPresets }: EmptyStatePr
               className="flex items-center gap-2.5 rounded-xl border border-neutral-900 bg-neutral-900/20 p-2.5 text-left text-xs text-neutral-400"
             >
               <div className="h-6 w-6 rounded bg-neutral-800 overflow-hidden shrink-0">
-                <img src={program.iconUrl} alt="" className="h-full w-full object-cover grayscale opacity-60" />
+                <img src={program.iconUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover grayscale opacity-60" />
               </div>
               <span className="truncate font-medium">{program.name}</span>
             </div>

@@ -299,6 +299,8 @@ export default function ShortcutCard({
                 <img
                   src={shortcut.iconUrl}
                   alt={shortcut.name}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover transition-transform duration-200 group-hover/icon:scale-105"
                 />
@@ -482,6 +484,8 @@ export default function ShortcutCard({
                   <img
                     src={shortcut.iconUrl}
                     alt={shortcut.name}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     className="h-full w-full object-cover"
                   />
@@ -618,6 +622,8 @@ export default function ShortcutCard({
                 <img
                   src={shortcut.iconUrl}
                   alt={shortcut.name}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover transition-transform duration-200 group-hover/icon:scale-105"
                 />

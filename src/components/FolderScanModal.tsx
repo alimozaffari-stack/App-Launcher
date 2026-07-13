@@ -256,6 +256,8 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                           <img
                             src={item.iconUrl}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             className="h-full w-full object-contain p-1"
                           />
                         ) : (

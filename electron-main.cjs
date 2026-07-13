@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = require("electron");
 
 const DESKTOP_PORT = 3000;
 const STORED_SETTING_KEYS = [
@@ -16,6 +16,9 @@ let backendUrl = null;
 let mainWindow = null;
 let recoveredStorage = {};
 let storageRecoveryInProgress = false;
+
+// The launcher has no desktop menu; avoid creating and retaining the default one.
+Menu.setApplicationMenu(null);
 
 async function startExpressServer() {
   process.env.APP_LAUNCHER_EMBEDDED = "1";
@@ -120,6 +123,16 @@ async function recoverLegacyStorage() {
 }
 
 ipcMain.handle("app-launcher:get-recovered-storage", () => recoveredStorage);
+ipcMain.handle("app-launcher:get-process-metrics", () =>
+  app.getAppMetrics().map((metric) => ({
+    pid: metric.pid,
+    type: metric.type,
+    name: metric.name || metric.serviceName || metric.type,
+    cpuPercent: Number(metric.cpu?.percentCPUUsage || 0),
+    workingSetKb: Number(metric.memory?.workingSetSize || 0),
+    privateKb: Number(metric.memory?.privateBytes || 0),
+  })),
+);
 ipcMain.handle("app-launcher:select-folder", async () => {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
   const result = await dialog.showOpenDialog(mainWindow, {

@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import type { Server } from "node:http";
 import path from "node:path";
-import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import express from "express";
 
@@ -27,19 +26,6 @@ export interface RunningServer {
   server: Server;
   port: number;
   url: string;
-}
-
-let aiClient: GoogleGenAI | null = null;
-
-function getGeminiClient() {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not configured.");
-    }
-    aiClient = new GoogleGenAI({ apiKey });
-  }
-  return aiClient;
 }
 
 function readRequiredString(value: unknown, maxLength: number): string | null {
@@ -182,34 +168,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     }
 
     try {
-      const ai = getGeminiClient();
-      const prompt = `You are a utility cataloguing assistant. The program name is ${JSON.stringify(name)}.
-Suggest:
-1. One category or primary use-case group. Prefer: Gaming, Productivity, Creative, Development, Streaming & Video, Utilities, or Communication.
-2. Three to five relevant lowercase search tags.
-3. One concise sentence describing the program.
-
-Return only JSON matching the supplied schema.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              category: { type: "STRING" },
-              tags: { type: "ARRAY", items: { type: "STRING" } },
-              description: { type: "STRING" },
-            },
-            required: ["category", "tags", "description"],
-          },
-        },
-      });
-
-      if (!response.text) throw new Error("The suggestion service returned no content.");
-      return res.json(JSON.parse(response.text));
+      // This optional bundle is loaded only when Auto-Suggest is used. Keeping the
+      // Google SDK out of the normal startup path noticeably reduces cold memory.
+      const suggestionModulePath = "./ai-suggest.cjs";
+      const { suggestShortcut } = await import(suggestionModulePath);
+      return res.json(await suggestShortcut(name));
     } catch (error) {
       console.error("Gemini suggestion failed:", error);
       return res.status(503).json({

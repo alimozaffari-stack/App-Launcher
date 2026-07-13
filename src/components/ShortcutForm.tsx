@@ -491,7 +491,7 @@ export default function ShortcutForm({
             <div className="flex items-center gap-4">
               <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-neutral-950 border border-neutral-800 overflow-hidden">
                 {iconUrl ? (
-                  <img src={iconUrl} alt="Preview" className="h-full w-full object-cover" />
+                  <img src={iconUrl} alt="Preview" decoding="async" className="h-full w-full object-cover" />
                 ) : (
                   <ImageIcon className="h-5 w-5 text-neutral-500" />
                 )}

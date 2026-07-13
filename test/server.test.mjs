@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -79,6 +79,11 @@ test("rejects unsafe launch targets before invoking the platform", async () => {
 test("does not expose the bundled server source", async () => {
   const response = await fetch(`${running.url}/server.cjs`);
   assert.equal(response.status, 404);
+});
+
+test("keeps the optional AI SDK out of the cold-start server bundle", async () => {
+  const serverBundle = await readFile(path.resolve("dist/server.cjs"), "utf8");
+  assert.doesNotMatch(serverBundle, /GoogleGenAI|@google\/genai|google-auth-library/);
 });
 
 test(

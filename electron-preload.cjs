@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld("appLauncherDesktop", {
   getRecoveredStorage() {
     return ipcRenderer.invoke("app-launcher:get-recovered-storage");
   },
+  getProcessMetrics() {
+    return ipcRenderer.invoke("app-launcher:get-process-metrics");
+  },
   selectFolder() {
     return ipcRenderer.invoke("app-launcher:select-folder");
   },

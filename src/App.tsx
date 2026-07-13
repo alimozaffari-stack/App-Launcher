@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Shortcut, TemporaryFolder } from "./types";
 import {
   Play,
@@ -42,12 +42,10 @@ import {
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import ShortcutCard from "./components/ShortcutCard";
-import ShortcutForm from "./components/ShortcutForm";
 import EmptyState from "./components/EmptyState";
-import FolderScanModal from "./components/FolderScanModal";
 import NominatedWorkspaceDropZone from "./components/NominatedWorkspaceDropZone";
 import TemporaryFolderCard from "./components/TemporaryFolderCard";
-import BulkEditPanel, { type BulkShortcutAction } from "./components/BulkEditPanel";
+import type { BulkShortcutAction } from "./components/BulkEditPanel";
 import {
   NOMINATED_CARD_PREFIX,
   addShortcutToWorkspace,
@@ -57,6 +55,11 @@ import {
   removeShortcutFromWorkspace,
   updateShortcutsInBulk,
 } from "./workspace.js";
+
+const BulkEditPanel = lazy(() => import("./components/BulkEditPanel"));
+const FolderScanModal = lazy(() => import("./components/FolderScanModal"));
+const MemoryDiagnostics = lazy(() => import("./components/MemoryDiagnostics"));
+const ShortcutForm = lazy(() => import("./components/ShortcutForm"));
 
 interface CategoryDoc {
   id: string;
@@ -79,6 +82,7 @@ export default function App() {
   // UI States
   const [showForm, setShowForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [showMemoryDiagnostics, setShowMemoryDiagnostics] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -888,6 +892,18 @@ export default function App() {
             </div>
 
             {/* Add Shortcut primary button */}
+            {window.appLauncherDesktop && (
+              <button
+                onClick={() => setShowMemoryDiagnostics(true)}
+                className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-[11px] font-semibold text-neutral-300 hover:bg-neutral-900 active:scale-95 transition-all shadow-md"
+                title="View the launcher's process memory usage"
+              >
+                <Cpu className="h-3.5 w-3.5 text-amber-400" />
+                Memory
+              </button>
+            )}
+
+            {/* Add Shortcut primary button */}
             <button
               onClick={() => {
                 setEditingShortcut(null);
@@ -1076,17 +1092,19 @@ export default function App() {
           </div>
         </div>
 
-        {isBulkMode && (
-          <BulkEditPanel
-            selectedCount={selectedShortcutIds.size}
-            visibleCount={bulkVisibleShortcuts.length}
-            categories={categoryNamesList}
-            onSelectVisible={handleSelectVisibleShortcuts}
-            onClearSelection={() => setSelectedShortcutIds(new Set())}
-            onDone={handleExitBulkMode}
-            onApply={handleApplyBulkAction}
-          />
-        )}
+        <Suspense fallback={null}>
+          {isBulkMode && (
+            <BulkEditPanel
+              selectedCount={selectedShortcutIds.size}
+              visibleCount={bulkVisibleShortcuts.length}
+              categories={categoryNamesList}
+              onSelectVisible={handleSelectVisibleShortcuts}
+              onClearSelection={() => setSelectedShortcutIds(new Set())}
+              onDone={handleExitBulkMode}
+              onApply={handleApplyBulkAction}
+            />
+          )}
+        </Suspense>
 
         {/* Loading Spinner */}
         {loading ? (
@@ -1637,9 +1655,10 @@ export default function App() {
       </div>
 
       {/* Forms Modal Overlay */}
-      <AnimatePresence>
-        {showForm && (
-          <ShortcutForm
+      <Suspense fallback={null}>
+        <AnimatePresence>
+          {showForm && (
+            <ShortcutForm
             initialShortcut={editingShortcut}
             categories={categoryNamesList}
             onAddCategory={handleAddCategory}
@@ -1655,20 +1674,27 @@ export default function App() {
               setEditingShortcut(null);
             }}
             isEdit={editingShortcut !== null && shortcuts.some((s) => s.id === editingShortcut.id)}
-          />
-        )}
-      </AnimatePresence>
+            />
+          )}
+        </AnimatePresence>
 
-      {/* Folder Scan Modal Overlay */}
-      <AnimatePresence>
-        {showScanModal && (
-          <FolderScanModal
-            categories={categoryNamesList}
-            onImportShortcuts={handleImportPresets}
-            onClose={() => setShowScanModal(false)}
-          />
-        )}
-      </AnimatePresence>
+        {/* Folder Scan Modal Overlay */}
+        <AnimatePresence>
+          {showScanModal && (
+            <FolderScanModal
+              categories={categoryNamesList}
+              onImportShortcuts={handleImportPresets}
+              onClose={() => setShowScanModal(false)}
+            />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showMemoryDiagnostics && (
+            <MemoryDiagnostics onClose={() => setShowMemoryDiagnostics(false)} />
+          )}
+        </AnimatePresence>
+      </Suspense>
 
       {/* Launching Overlay / Modal */}
       <AnimatePresence>
