@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +12,13 @@ const require = createRequire(import.meta.url);
 const { startServer } = require("../dist/server.cjs");
 
 let running;
+
+function readPngDimensions(dataUrl) {
+  const encoded = String(dataUrl || "").split(",", 2)[1] || "";
+  const png = Buffer.from(encoded, "base64");
+  assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
 
 before(async () => {
   running = await startServer({
@@ -81,6 +88,26 @@ test("does not expose the bundled server source", async () => {
   assert.equal(response.status, 404);
 });
 
+test("keeps the optional AI SDK out of the cold-start server bundle", async () => {
+  const serverBundle = await readFile(path.resolve("dist/server.cjs"), "utf8");
+  assert.doesNotMatch(serverBundle, /GoogleGenAI|@google\/genai|google-auth-library/);
+});
+
+test(
+  "extracts a high-DPI Windows icon master",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const response = await fetch(`${running.url}/api/extract-icon`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ execPath: process.execPath }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.deepEqual(readPngDimensions(result.iconUrl), { width: 128, height: 128 });
+  },
+);
+
 test(
   "scans nested Windows launchers and returns their extracted icons",
   { skip: process.platform !== "win32" },
@@ -96,6 +123,11 @@ test(
         `[InternetShortcut]\nURL=https://example.com\nIconFile=${process.execPath}\nIconIndex=0\n`,
         "utf8",
       );
+      await writeFile(
+        path.join(fixtureRoot, "Shell Fallback Website.url"),
+        "[InternetShortcut]\nURL=https://example.com/fallback\nIconFile=C:\\missing\\icon.exe\nIconIndex=0\n",
+        "utf8",
+      );
 
       const response = await fetch(`${running.url}/api/scan-folder`, {
         method: "POST",
@@ -105,10 +137,17 @@ test(
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.equal(result.success, true);
-      assert.equal(result.shortcuts.length, 2);
+      assert.equal(result.shortcuts.length, 3);
       for (const shortcut of result.shortcuts) {
         assert.match(shortcut.iconUrl || "", /^data:image\/png;base64,/);
       }
+      const executableShortcut = result.shortcuts.find(
+        (shortcut) => shortcut.name === "Fixture App",
+      );
+      assert.deepEqual(readPngDimensions(executableShortcut?.iconUrl), {
+        width: 128,
+        height: 128,
+      });
     } finally {
       await rm(fixtureRoot, { force: true, recursive: true });
     }

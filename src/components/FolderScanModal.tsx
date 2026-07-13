@@ -55,10 +55,12 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
           selected: true,
         }));
         setScannedItems(items);
+        const recoveredIconCount = items.filter((item: ScannedShortcut) => item.iconUrl).length;
+        const iconSummary = ` Windows supplied ${recoveredIconCount}/${items.length} icons.`;
         setScanMessage(
           items.length === 1
-            ? "Found 1 launchable item."
-            : `Found ${items.length} launchable items.`,
+            ? `Found 1 launchable item.${iconSummary}`
+            : `Found ${items.length} launchable items.${iconSummary}`,
         );
       }
     } catch (err: any) {
@@ -254,6 +256,8 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                           <img
                             src={item.iconUrl}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             className="h-full w-full object-contain p-1"
                           />
                         ) : (

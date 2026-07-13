@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Shortcut } from "./types";
+import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { Shortcut, TemporaryFolder } from "./types";
 import {
   Play,
   Plus,
@@ -22,7 +22,10 @@ import {
   List,
   Star,
   Bookmark,
-  ArrowDownAZ
+  ArrowDownAZ,
+  ListChecks,
+  SearchCheck,
+  ImageUp,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -41,9 +44,31 @@ import {
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import ShortcutCard from "./components/ShortcutCard";
-import ShortcutForm from "./components/ShortcutForm";
 import EmptyState from "./components/EmptyState";
-import FolderScanModal from "./components/FolderScanModal";
+import NominatedWorkspaceDropZone from "./components/NominatedWorkspaceDropZone";
+import TemporaryFolderCard from "./components/TemporaryFolderCard";
+import type { BulkShortcutAction } from "./components/BulkEditPanel";
+import type { DuplicateGroup } from "./components/DuplicateCleaner";
+import { cleanExactDuplicates } from "./duplicates.js";
+import {
+  NOMINATED_CARD_PREFIX,
+  addShortcutToWorkspace,
+  isNominatedDropTarget,
+  isShortcutInWorkspace,
+  readTemporaryFolders,
+  removeShortcutFromWorkspace,
+  updateShortcutsInBulk,
+} from "./workspace.js";
+
+const BulkEditPanel = lazy(() => import("./components/BulkEditPanel"));
+const FolderScanModal = lazy(() => import("./components/FolderScanModal"));
+const MemoryDiagnostics = lazy(() => import("./components/MemoryDiagnostics"));
+const ShortcutForm = lazy(() => import("./components/ShortcutForm"));
+const DuplicateCleaner = lazy(() => import("./components/DuplicateCleaner"));
+
+const DUPLICATE_BACKUP_KEY = "launcher_duplicate_cleanup_backup";
+const NOMINATED_WORKSPACE_NONE = "__none__";
+const NOMINATED_WORKSPACE_ALL = "__all__";
 
 interface CategoryDoc {
   id: string;
@@ -66,8 +91,21 @@ export default function App() {
   // UI States
   const [showForm, setShowForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
+  const [showMemoryDiagnostics, setShowMemoryDiagnostics] = useState(false);
+  const [showDuplicateCleaner, setShowDuplicateCleaner] = useState(false);
+  const [hasDuplicateBackup, setHasDuplicateBackup] = useState(
+    () => Boolean(sessionStorage.getItem(DUPLICATE_BACKUP_KEY)),
+  );
+  const [iconRefreshProgress, setIconRefreshProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [selectedShortcutIds, setSelectedShortcutIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   
   // Launching Modal status
   const [launchStatus, setLaunchStatus] = useState<"connecting" | "success" | "fallback" | "connecting_local">("connecting");
@@ -87,6 +125,9 @@ export default function App() {
   const [nominatedCategory, setNominatedCategory] = useState<string>(() => {
     return localStorage.getItem("launcher_nominated_category") || "Office";
   });
+  const [temporaryFolders, setTemporaryFolders] = useState<TemporaryFolder[]>(() =>
+    readTemporaryFolders(sessionStorage.getItem("launcher_temporary_folders")),
+  );
 
   // Sort mode: "manual", "alphabetical", or "date"
   const [sortMode, setSortMode] = useState<"manual" | "alphabetical" | "date">(() => {
@@ -104,6 +145,167 @@ export default function App() {
     setShortcuts(updated);
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
   };
+
+  const handleSelectionToggle = (id: string) => {
+    setSelectedShortcutIds((current) => {
+      const updated = new Set(current);
+      if (updated.has(id)) updated.delete(id);
+      else updated.add(id);
+      return updated;
+    });
+  };
+
+  const handleExitBulkMode = () => {
+    setIsBulkMode(false);
+    setSelectedShortcutIds(new Set());
+  };
+
+  const handleApplyBulkAction = (action: BulkShortcutAction) => {
+    const updated = updateShortcutsInBulk(shortcuts, selectedShortcutIds, action);
+    if (updated === shortcuts) return 0;
+    const changedCount = updated.reduce(
+      (count, shortcut, index) => count + (shortcut !== shortcuts[index] ? 1 : 0),
+      0,
+    );
+    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+    setShortcuts(updated);
+    return changedCount;
+  };
+
+  const handleSetNominatedWorkspace = (workspace: string) => {
+    setNominatedCategory(workspace);
+    localStorage.setItem("launcher_nominated_category", workspace);
+  };
+
+  const handleCleanExactDuplicates = (groups: DuplicateGroup[]) => {
+    const removableCount = groups.reduce(
+      (count, group) => count + Math.max(0, group.shortcutIds.length - 1),
+      0,
+    );
+    if (
+      removableCount === 0 ||
+      !confirm(
+        `Merge ${removableCount} redundant ${removableCount === 1 ? "card" : "cards"}? Tags, groups, favourites, icons and recent-use details will be preserved. No files will be deleted.`,
+      )
+    ) return;
+
+    const affectedIds = new Set(groups.flatMap((group) => group.shortcutIds));
+    const affectedShortcuts = shortcuts.filter((shortcut) => affectedIds.has(shortcut.id));
+    try {
+      sessionStorage.setItem(
+        DUPLICATE_BACKUP_KEY,
+        JSON.stringify({ shortcuts: affectedShortcuts }),
+      );
+    } catch (error) {
+      console.error("Could not create duplicate-cleanup backup:", error);
+      alert("Cleanup was cancelled because an undo backup could not be created.");
+      return;
+    }
+
+    const result = cleanExactDuplicates(shortcuts, groups);
+    setShortcuts(result.shortcuts);
+    localStorage.setItem("launcher_shortcuts", JSON.stringify(result.shortcuts));
+    setSelectedShortcutIds(new Set());
+    setHasDuplicateBackup(true);
+  };
+
+  const handleUndoDuplicateCleanup = () => {
+    try {
+      const rawBackup = sessionStorage.getItem(DUPLICATE_BACKUP_KEY);
+      const backup = rawBackup ? JSON.parse(rawBackup) : null;
+      if (!Array.isArray(backup?.shortcuts)) throw new Error("The undo backup is invalid.");
+      const originals = backup.shortcuts as Shortcut[];
+      const restoredIds = new Set(originals.map((shortcut) => shortcut.id));
+      const restored = [...shortcuts.filter((shortcut) => !restoredIds.has(shortcut.id)), ...originals]
+        .sort((first, second) => (first.order ?? Number.MAX_SAFE_INTEGER) - (second.order ?? Number.MAX_SAFE_INTEGER))
+        .map((shortcut, index) => ({ ...shortcut, order: index }));
+      setShortcuts(restored);
+      localStorage.setItem("launcher_shortcuts", JSON.stringify(restored));
+      sessionStorage.removeItem(DUPLICATE_BACKUP_KEY);
+      setHasDuplicateBackup(false);
+    } catch (error) {
+      console.error("Could not restore duplicate-cleanup backup:", error);
+      alert("The last duplicate cleanup could not be restored.");
+    }
+  };
+
+  const handleRefreshShortcutIcons = async () => {
+    const candidates = shortcuts.filter((shortcut) =>
+      /(^[a-z]:[\\/]|^\\\\|^%[^%]+%|\.(exe|lnk|url|appref-ms)$)/i.test(
+        shortcut.execPath.trim(),
+      ),
+    );
+    if (
+      candidates.length === 0 ||
+      !confirm(
+        `Re-extract ${candidates.length} local ${candidates.length === 1 ? "icon" : "icons"} at high quality? This is a one-time operation and may take a little while.`,
+      )
+    ) return;
+
+    setIconRefreshProgress({ completed: 0, total: candidates.length });
+    const refreshedIcons = new Map<string, string>();
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < candidates.length) {
+        const shortcut = candidates[nextIndex];
+        nextIndex += 1;
+        try {
+          const response = await fetch("/api/extract-icon", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ execPath: shortcut.execPath }),
+          });
+          if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.iconUrl) {
+              refreshedIcons.set(shortcut.id, result.iconUrl);
+            }
+          }
+        } catch (error) {
+          console.warn(`Could not refresh the icon for ${shortcut.name}:`, error);
+        } finally {
+          setIconRefreshProgress((current) =>
+            current ? { ...current, completed: current.completed + 1 } : current,
+          );
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(2, candidates.length) }, () => worker()),
+    );
+    const updated = shortcuts.map((shortcut) => {
+      const iconUrl = refreshedIcons.get(shortcut.id);
+      return iconUrl ? { ...shortcut, iconUrl } : shortcut;
+    });
+    try {
+      localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      setShortcuts(updated);
+      alert(
+        `Updated ${refreshedIcons.size} of ${candidates.length} local ${candidates.length === 1 ? "icon" : "icons"}.`,
+      );
+    } catch (error) {
+      console.error("Could not store refreshed icons:", error);
+      alert("The sharper icons could not be saved because local storage is full. No icons were changed.");
+    } finally {
+      setIconRefreshProgress(null);
+    }
+  };
+
+  useEffect(() => {
+    sessionStorage.setItem("launcher_temporary_folders", JSON.stringify(temporaryFolders));
+  }, [temporaryFolders]);
+
+  useEffect(() => {
+    if (
+      categories.length > 0 &&
+      nominatedCategory !== NOMINATED_WORKSPACE_NONE &&
+      nominatedCategory !== NOMINATED_WORKSPACE_ALL &&
+      !categories.some((category) => category.name === nominatedCategory)
+    ) {
+      handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE);
+    }
+  }, [categories, nominatedCategory]);
 
   // Listen for PWA Install Prompt
   useEffect(() => {
@@ -358,6 +560,9 @@ export default function App() {
             tags: data.tags,
             description: data.description,
             iconUrl: data.iconUrl || undefined,
+            workspaceTags: (data.workspaceTags ?? s.workspaceTags ?? []).filter(
+              (group) => group !== data.category,
+            ),
           };
         }
         return s;
@@ -372,6 +577,9 @@ export default function App() {
         tags: data.tags,
         description: data.description,
         iconUrl: data.iconUrl || undefined,
+        workspaceTags: (data.workspaceTags || []).filter(
+          (group) => group !== data.category,
+        ),
         createdAt: Date.now(),
         order: -1,
       };
@@ -384,6 +592,85 @@ export default function App() {
     }
     setShortcuts(updated);
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+  };
+
+  const handleAddShortcutToWorkspace = (id: string) => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) return;
+    setShortcuts((current) => {
+      const updated = addShortcutToWorkspace(current, id, nominatedCategory);
+      if (updated !== current) {
+        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveShortcutFromWorkspace = (id: string) => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) return;
+    setShortcuts((current) => {
+      const updated = removeShortcutFromWorkspace(current, id, nominatedCategory);
+      if (updated !== current) {
+        localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const handleChooseTemporaryFolder = async () => {
+    if (
+      nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+      nominatedCategory === NOMINATED_WORKSPACE_ALL
+    ) {
+      alert("Choose a specific top workspace before adding a temporary folder.");
+      return;
+    }
+    if (!window.appLauncherDesktop?.selectFolder) {
+      alert("Temporary folders can be selected in the installed desktop application.");
+      return;
+    }
+
+    const selected = await window.appLauncherDesktop.selectFolder();
+    if (!selected) return;
+
+    setTemporaryFolders((current) => {
+      const alreadyAdded = current.some(
+        (folder) =>
+          folder.workspace === nominatedCategory &&
+          folder.path.toLowerCase() === selected.path.toLowerCase(),
+      );
+      if (alreadyAdded) return current;
+      return [
+        {
+          id: `temp-folder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: selected.name,
+          path: selected.path,
+          workspace: nominatedCategory,
+          createdAt: Date.now(),
+        },
+        ...current,
+      ];
+    });
+  };
+
+  const handleRemoveTemporaryFolder = (id: string) => {
+    setTemporaryFolders((current) => current.filter((folder) => folder.id !== id));
+  };
+
+  const handlePinTemporaryFolder = async (folder: TemporaryFolder) => {
+    await handleSaveShortcut({
+      name: folder.name,
+      execPath: folder.path,
+      category: folder.workspace,
+      tags: ["Folder", "Workspace"],
+      description: `Workspace folder: ${folder.path}`,
+    });
+    handleRemoveTemporaryFolder(folder.id);
   };
 
   // Sensors configuration for dnd-kit
@@ -401,11 +688,19 @@ export default function App() {
   // Handle manual drag and drop sorting
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (!over) return;
+
+    const activeId = String(active.id);
+    if (isNominatedDropTarget(over.id)) {
+      handleAddShortcutToWorkspace(activeId);
+      return;
+    }
+
+    if (sortMode !== "manual" || active.id === over.id) return;
 
     setShortcuts((prevShortcuts) => {
-      const activeIndex = prevShortcuts.findIndex((s) => s.id === active.id);
-      const overIndex = prevShortcuts.findIndex((s) => s.id === over.id);
+      const activeIndex = prevShortcuts.findIndex((s) => s.id === activeId);
+      const overIndex = prevShortcuts.findIndex((s) => s.id === String(over.id));
 
       if (activeIndex === -1 || overIndex === -1) return prevShortcuts;
 
@@ -448,17 +743,20 @@ export default function App() {
 
   // Delete dynamic category
   const handleDeleteCategory = async (categoryObj: CategoryDoc) => {
-    // Check if category is currently used by any shortcut
-    const isUsed = shortcuts.some((s) => s.category === categoryObj.name);
+    const hasPrimaryMembers = shortcuts.some((s) => s.category === categoryObj.name);
+    const hasAdditionalMembers = shortcuts.some((s) =>
+      (s.workspaceTags || []).includes(categoryObj.name),
+    );
+    const isUsed = hasPrimaryMembers || hasAdditionalMembers;
     let confirmMsg = `Are you sure you want to delete the "${categoryObj.name}" category?`;
     if (isUsed) {
-      confirmMsg = `The category "${categoryObj.name}" contains active shortcuts. Deleting this category will reassign these shortcuts to the "Others" category. Do you want to proceed?`;
+      confirmMsg = `The group "${categoryObj.name}" contains shortcut memberships. Primary members will be reassigned and additional memberships will be removed. Do you want to proceed?`;
     }
 
     if (confirm(confirmMsg)) {
       // Ensure "Others" category exists if we are going to reassign shortcuts
       let finalCategories = [...categories];
-      if (isUsed && categoryObj.name !== "Others") {
+      if (hasPrimaryMembers && categoryObj.name !== "Others") {
         const hasOthers = categories.some((c) => c.name.toLowerCase() === "others");
         if (!hasOthers) {
           const newOthers: CategoryDoc = {
@@ -472,11 +770,19 @@ export default function App() {
       // Reassign shortcuts if needed
       let updatedShortcuts = [...shortcuts];
       if (isUsed) {
+        const fallbackCategory =
+          categoryObj.name === "Others"
+            ? finalCategories.find((category) => category.id !== categoryObj.id)?.name || "Office"
+            : "Others";
         updatedShortcuts = shortcuts.map((s) => {
-          if (s.category === categoryObj.name) {
-            return { ...s, category: "Others" };
-          }
-          return s;
+          const remainingGroups = (s.workspaceTags || []).filter(
+            (group) => group !== categoryObj.name && group !== fallbackCategory,
+          );
+          return {
+            ...s,
+            category: s.category === categoryObj.name ? fallbackCategory : s.category,
+            workspaceTags: remainingGroups.length > 0 ? remainingGroups : undefined,
+          };
         });
         setShortcuts(updatedShortcuts);
         localStorage.setItem("launcher_shortcuts", JSON.stringify(updatedShortcuts));
@@ -488,6 +794,12 @@ export default function App() {
       if (selectedCategory === categoryObj.name) {
         setSelectedCategory("All");
       }
+      setTemporaryFolders((current) =>
+        current.filter((folder) => folder.workspace !== categoryObj.name),
+      );
+      if (nominatedCategory === categoryObj.name) {
+        handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE);
+      }
     }
   };
 
@@ -497,6 +809,11 @@ export default function App() {
       const updated = shortcuts.filter((s) => s.id !== id);
       setShortcuts(updated);
       localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+      setSelectedShortcutIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -519,6 +836,8 @@ export default function App() {
     if (confirm("Are you sure you want to clear all shortcuts? This will reset the launcher to a fresh, blank state.")) {
       setShortcuts([]);
       localStorage.removeItem("launcher_shortcuts");
+      setSelectedShortcutIds(new Set());
+      setIsBulkMode(false);
     }
   };
 
@@ -563,6 +882,17 @@ export default function App() {
       console.error("Launch request failed:", err);
       setLaunchStatus("fallback");
     }
+  };
+
+  const handleLaunchTemporaryFolder = (folder: TemporaryFolder) => {
+    void handleLaunch({
+      id: folder.id,
+      name: folder.name,
+      execPath: folder.path,
+      category: folder.workspace,
+      tags: ["Temporary", "Folder"],
+      createdAt: folder.createdAt,
+    });
   };
 
   const copyLaunchCommand = (pathStr: string) => {
@@ -621,30 +951,66 @@ export default function App() {
         !normalizedQuery ||
         shortcut.name.toLowerCase().includes(normalizedQuery) ||
         shortcut.category.toLowerCase().includes(normalizedQuery) ||
-        shortcut.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery));
+        (shortcut.tags || []).some((tag) => tag.toLowerCase().includes(normalizedQuery)) ||
+        (shortcut.workspaceTags || []).some((tag) =>
+          tag.toLowerCase().includes(normalizedQuery),
+        );
       const matchesCategory =
-        selectedCategory === "All" || shortcut.category === selectedCategory;
+        selectedCategory === "All" || isShortcutInWorkspace(shortcut, selectedCategory);
       return matchesSearch && matchesCategory;
     });
   }, [displayShortcuts, searchQuery, selectedCategory]);
 
   const categoryNamesList = categories.map((c) => c.name);
+  const nominatedWorkspaceCategory =
+    nominatedCategory === NOMINATED_WORKSPACE_NONE ||
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? null
+      : nominatedCategory;
+  const nominatedWorkspaceLabel =
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? "All shortcuts"
+      : nominatedWorkspaceCategory || "None";
+  const hasNominatedWorkspace = nominatedCategory !== NOMINATED_WORKSPACE_NONE;
 
   const favoriteItems = displayShortcuts.filter((s) => s.isFavorite);
-  const nominatedItems = displayShortcuts.filter((s) => s.category === nominatedCategory);
+  const nominatedItems =
+    nominatedCategory === NOMINATED_WORKSPACE_ALL
+      ? displayShortcuts
+      : nominatedWorkspaceCategory
+        ? displayShortcuts.filter((shortcut) =>
+            isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+          )
+        : [];
+  const currentTemporaryFolders = nominatedWorkspaceCategory
+    ? temporaryFolders.filter(
+        (folder) => folder.workspace === nominatedWorkspaceCategory,
+      )
+    : [];
   const lastUsedItems = [...shortcuts]
     .filter((s) => s.lastLaunchedAt !== undefined && s.lastLaunchedAt > 0)
     .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
     .slice(0, 4);
+  const bulkVisibleShortcuts =
+    selectedCategory === "All" && !searchQuery ? displayShortcuts : filteredShortcuts;
+
+  const handleSelectVisibleShortcuts = () => {
+    setSelectedShortcutIds(new Set(bulkVisibleShortcuts.map((shortcut) => shortcut.id)));
+  };
 
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-amber-500/20 selection:text-amber-400 relative overflow-hidden"
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
     >
+      <div
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-amber-500/20 selection:text-amber-400 relative overflow-hidden"
+      >
       
       {/* File Drag and Drop Overlay */}
       <AnimatePresence>
@@ -704,6 +1070,36 @@ export default function App() {
                 <span><strong className="text-white font-semibold">{categories.length}</strong> Groups</span>
               </div>
             </div>
+
+            {/* Add Shortcut primary button */}
+            {window.appLauncherDesktop && (
+              <button
+                onClick={() => void handleRefreshShortcutIcons()}
+                disabled={Boolean(iconRefreshProgress) || shortcuts.length === 0}
+                className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-[11px] font-semibold text-neutral-300 hover:bg-neutral-900 active:scale-95 transition-all shadow-md disabled:opacity-50"
+                title="Re-extract existing Windows icons from their highest-quality resources"
+              >
+                {iconRefreshProgress ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />
+                ) : (
+                  <ImageUp className="h-3.5 w-3.5 text-amber-400" />
+                )}
+                {iconRefreshProgress
+                  ? `${iconRefreshProgress.completed}/${iconRefreshProgress.total}`
+                  : "Sharpen icons"}
+              </button>
+            )}
+
+            {window.appLauncherDesktop && (
+              <button
+                onClick={() => setShowMemoryDiagnostics(true)}
+                className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-[11px] font-semibold text-neutral-300 hover:bg-neutral-900 active:scale-95 transition-all shadow-md"
+                title="View the launcher's process memory usage"
+              >
+                <Cpu className="h-3.5 w-3.5 text-amber-400" />
+                Memory
+              </button>
+            )}
 
             {/* Add Shortcut primary button */}
             <button
@@ -850,29 +1246,87 @@ export default function App() {
 
           </div>
 
-          {/* Pin dropdown to nominate a category to the dashboard */}
-          <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors w-full xl:w-auto justify-between xl:justify-start h-[40px] self-start">
+          <div className="flex w-full shrink-0 items-center gap-2 xl:w-auto">
+            <button
+              type="button"
+              onClick={() => setShowDuplicateCleaner(true)}
+              disabled={shortcuts.length < 2}
+              className="inline-flex h-[40px] items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900/40 px-3 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white disabled:opacity-40"
+            >
+              <SearchCheck className="h-3.5 w-3.5" />
+              Duplicates
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (isBulkMode) handleExitBulkMode();
+                else setIsBulkMode(true);
+              }}
+              disabled={shortcuts.length === 0}
+              className={`inline-flex h-[40px] items-center gap-1.5 rounded-lg border px-3 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-40 ${
+                isBulkMode
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-400"
+                  : "border-neutral-800 bg-neutral-900/40 text-neutral-400 hover:border-neutral-700 hover:text-white"
+              }`}
+              aria-pressed={isBulkMode}
+            >
+              <ListChecks className="h-3.5 w-3.5" />
+              Bulk actions
+            </button>
+
+          {/* Controls only the optional top workspace; group pills filter cards below. */}
+          <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors flex-1 xl:flex-none justify-between xl:justify-start h-[40px] self-start">
             <div className="flex items-center gap-1.5">
               <Bookmark className="h-3.5 w-3.5 text-amber-500 fill-amber-500/10" />
-              <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">PIN:</span>
+              <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">Top workspace:</span>
             </div>
             <select
               value={nominatedCategory}
-              onChange={(e) => {
-                setNominatedCategory(e.target.value);
-                localStorage.setItem("launcher_nominated_category", e.target.value);
-              }}
+              onChange={(e) => handleSetNominatedWorkspace(e.target.value)}
               className="bg-transparent border-none text-xs text-neutral-200 focus:outline-none cursor-pointer hover:text-white font-semibold pr-1"
-              title="Select a category/group to pin/nominate to your dashboard"
+              title="Choose what appears in the optional top workspace. Group filters control the full cards below."
             >
+              <option value={NOMINATED_WORKSPACE_NONE} className="bg-neutral-950 text-neutral-200">
+                None (hide)
+              </option>
+              <option value={NOMINATED_WORKSPACE_ALL} className="bg-neutral-950 text-neutral-200">
+                All shortcuts
+              </option>
               {categoryNamesList.map((catName) => (
                 <option key={catName} value={catName} className="bg-neutral-950 text-neutral-200">
                   {catName}
                 </option>
               ))}
             </select>
+            {nominatedCategory !== NOMINATED_WORKSPACE_NONE && (
+              <button
+                type="button"
+                onClick={() => handleSetNominatedWorkspace(NOMINATED_WORKSPACE_NONE)}
+                className="rounded p-0.5 text-neutral-500 hover:bg-neutral-800 hover:text-white"
+                title="Clear and hide the top workspace"
+                aria-label="Clear top workspace"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
           </div>
         </div>
+
+        <Suspense fallback={null}>
+          {isBulkMode && (
+            <BulkEditPanel
+              selectedCount={selectedShortcutIds.size}
+              visibleCount={bulkVisibleShortcuts.length}
+              categories={categoryNamesList}
+              onSelectVisible={handleSelectVisibleShortcuts}
+              onClearSelection={() => setSelectedShortcutIds(new Set())}
+              onDone={handleExitBulkMode}
+              onApply={handleApplyBulkAction}
+            />
+          )}
+        </Suspense>
 
         {/* Loading Spinner */}
         {loading ? (
@@ -915,27 +1369,52 @@ export default function App() {
             {selectedCategory === "All" && !searchQuery ? (
               <>
                 {/* Side-by-Side Three Windows with Fine Pale Frames */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" id="dashboard-top-panels">
+                <div className={`grid grid-cols-1 gap-5 ${hasNominatedWorkspace ? "lg:grid-cols-3" : "lg:grid-cols-2"}`} id="dashboard-top-panels">
                   
                   {/* WINDOW 1: NOMINATED GROUP */}
-                  <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 flex flex-col gap-3 backdrop-blur-md shadow-sm" style={{ padding: "12px" }} id="panel-nominated">
+                  {hasNominatedWorkspace && (
+                  <NominatedWorkspaceDropZone
+                    workspaceName={nominatedWorkspaceLabel}
+                    disabled={nominatedCategory === NOMINATED_WORKSPACE_ALL}
+                  >
                     <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
                       <div className="flex items-center gap-1.5">
                         <Bookmark className="h-4 w-4 text-amber-500 fill-amber-500/10" />
                         <h2 className="text-[11.5px] uppercase font-mono tracking-wider font-bold text-neutral-200">
-                          Nominated: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedCategory}</span>
+                          Top workspace: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedWorkspaceLabel}</span>
                         </h2>
                       </div>
-                      <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
-                        {nominatedItems.length}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {nominatedWorkspaceCategory && <button
+                          type="button"
+                          onClick={() => void handleChooseTemporaryFolder()}
+                          className="flex items-center gap-1 rounded-md border border-amber-500/20 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-semibold text-amber-400 transition-colors hover:border-amber-500/40 hover:bg-amber-500/10"
+                          title={`Add a temporary folder to ${nominatedWorkspaceLabel}`}
+                        >
+                          <FolderPlus className="h-3 w-3" />
+                          Folder
+                        </button>}
+                        <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
+                          {nominatedItems.length + currentTemporaryFolders.length}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex-1 overflow-y-auto max-h-[340px] scrollbar-thin scrollbar-thumb-neutral-800 pr-1">
-                      {nominatedItems.length > 0 ? (
+                      {nominatedItems.length > 0 || currentTemporaryFolders.length > 0 ? (
                         <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-2 gap-2" : "flex flex-col gap-1.5"}>
+                          {currentTemporaryFolders.map((folder) => (
+                            <TemporaryFolderCard
+                              key={folder.id}
+                              folder={folder}
+                              onLaunch={handleLaunchTemporaryFolder}
+                              onPin={(item) => void handlePinTemporaryFolder(item)}
+                              onRemove={handleRemoveTemporaryFolder}
+                            />
+                          ))}
                           {nominatedItems.map((shortcut) => (
                             <ShortcutCard
                               key={`nom-${shortcut.id}`}
+                              dndId={`${NOMINATED_CARD_PREFIX}${shortcut.id}`}
                               shortcut={shortcut}
                               viewMode={viewMode}
                               sortMode={sortMode}
@@ -947,6 +1426,15 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
+                              workspaceName={nominatedWorkspaceLabel}
+                              isInWorkspace={true}
+                              onRemoveFromWorkspace={
+                                nominatedWorkspaceCategory &&
+                                shortcut.category !== nominatedWorkspaceCategory &&
+                                (shortcut.workspaceTags || []).includes(nominatedWorkspaceCategory)
+                                  ? handleRemoveShortcutFromWorkspace
+                                  : undefined
+                              }
                             />
                           ))}
                         </div>
@@ -954,12 +1442,13 @@ export default function App() {
                         <div className="h-full flex flex-col items-center justify-center text-center py-8">
                           <Bookmark className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
                           <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            No programs in <span className="text-neutral-400">{nominatedCategory}</span> yet. Choose another category above or add new items.
+                            Drag a shortcut here to add it to <span className="text-neutral-400">{nominatedWorkspaceLabel}</span>, or add a temporary folder.
                           </p>
                         </div>
                       )}
                     </div>
-                  </div>
+                  </NominatedWorkspaceDropZone>
+                  )}
 
                   {/* WINDOW 2: FAVOURITES */}
                   <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 p-4 flex flex-col gap-3 backdrop-blur-md shadow-sm" id="panel-favourites">
@@ -1076,6 +1565,28 @@ export default function App() {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      {isBulkMode && (
+                        <div className="flex items-center gap-1 rounded-lg border border-amber-500/25 bg-amber-500/5 p-0.5">
+                          <span className="px-1.5 text-[9px] font-semibold text-amber-400">
+                            {selectedShortcutIds.size} selected
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleSelectVisibleShortcuts}
+                            className="rounded px-2 py-1 text-[9px] font-bold text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedShortcutIds(new Set())}
+                            disabled={selectedShortcutIds.size === 0}
+                            className="rounded px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40"
+                          >
+                            Deselect
+                          </button>
+                        </div>
+                      )}
                       {/* Search Input */}
                       <div className="relative w-40 sm:w-48">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
@@ -1098,9 +1609,11 @@ export default function App() {
                       </div>
 
                       {/* Sort Style */}
-                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
+                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Sort cards. Drag order lets you rearrange them manually.">
+                        <span className="px-1.5 text-[8px] font-semibold uppercase tracking-wider text-neutral-600">Sort</span>
                         <button
                           type="button"
+                          title="Drag order: manually rearrange cards by dragging them"
                           onClick={() => {
                             setSortMode("manual");
                             localStorage.setItem("launcher_sort_mode", "manual");
@@ -1111,7 +1624,7 @@ export default function App() {
                               : "text-neutral-400 hover:text-white"
                           }`}
                         >
-                          Manual
+                          Drag order
                         </button>
                         <button
                           type="button"
@@ -1180,12 +1693,7 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext
+                  <SortableContext
                       items={displayShortcuts.map((s) => s.id)}
                       strategy={rectSortingStrategy}
                     >
@@ -1208,12 +1716,23 @@ export default function App() {
                               onDelete={handleDeleteShortcut}
                               onLaunch={handleLaunch}
                               onToggleFavorite={handleToggleFavorite}
+                              onAddToWorkspace={nominatedWorkspaceCategory ? handleAddShortcutToWorkspace : undefined}
+                              workspaceName={nominatedWorkspaceCategory || undefined}
+                              isInWorkspace={
+                                nominatedCategory === NOMINATED_WORKSPACE_ALL ||
+                                Boolean(
+                                  nominatedWorkspaceCategory &&
+                                  isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+                                )
+                              }
+                              isSelectionMode={isBulkMode}
+                              isSelected={selectedShortcutIds.has(shortcut.id)}
+                              onSelectionToggle={handleSelectionToggle}
                             />
                           ))}
                         </AnimatePresence>
                       </div>
-                    </SortableContext>
-                  </DndContext>
+                  </SortableContext>
                 </motion.section>
               </>
             ) : (
@@ -1231,6 +1750,28 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {isBulkMode && (
+                      <div className="flex items-center gap-1 rounded-lg border border-amber-500/25 bg-amber-500/5 p-0.5">
+                        <span className="px-1.5 text-[9px] font-semibold text-amber-400">
+                          {selectedShortcutIds.size} selected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleSelectVisibleShortcuts}
+                          className="rounded px-2 py-1 text-[9px] font-bold text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedShortcutIds(new Set())}
+                          disabled={selectedShortcutIds.size === 0}
+                          className="rounded px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40"
+                        >
+                          Deselect
+                        </button>
+                      </div>
+                    )}
                     {/* Search Input */}
                     <div className="relative w-40 sm:w-48">
                       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
@@ -1253,9 +1794,11 @@ export default function App() {
                     </div>
 
                     {/* Sort Style */}
-                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
+                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Sort cards. Drag order lets you rearrange them manually.">
+                      <span className="px-1.5 text-[8px] font-semibold uppercase tracking-wider text-neutral-600">Sort</span>
                       <button
                         type="button"
+                        title="Drag order: manually rearrange cards by dragging them"
                         onClick={() => {
                           setSortMode("manual");
                           localStorage.setItem("launcher_sort_mode", "manual");
@@ -1266,7 +1809,7 @@ export default function App() {
                             : "text-neutral-400 hover:text-white"
                         }`}
                       >
-                        Manual
+                        Drag order
                       </button>
                       <button
                         type="button"
@@ -1336,12 +1879,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
+                <SortableContext
                     items={filteredShortcuts.map((s) => s.id)}
                     strategy={rectSortingStrategy}
                   >
@@ -1364,12 +1902,23 @@ export default function App() {
                             onDelete={handleDeleteShortcut}
                             onLaunch={handleLaunch}
                             onToggleFavorite={handleToggleFavorite}
+                            onAddToWorkspace={nominatedWorkspaceCategory ? handleAddShortcutToWorkspace : undefined}
+                            workspaceName={nominatedWorkspaceCategory || undefined}
+                            isInWorkspace={
+                              nominatedCategory === NOMINATED_WORKSPACE_ALL ||
+                              Boolean(
+                                nominatedWorkspaceCategory &&
+                                isShortcutInWorkspace(shortcut, nominatedWorkspaceCategory),
+                              )
+                            }
+                            isSelectionMode={isBulkMode}
+                            isSelected={selectedShortcutIds.has(shortcut.id)}
+                            onSelectionToggle={handleSelectionToggle}
                           />
                         ))}
                       </AnimatePresence>
                     </div>
-                  </SortableContext>
-                </DndContext>
+                </SortableContext>
               </div>
             )}
           </div>
@@ -1394,9 +1943,10 @@ export default function App() {
       </div>
 
       {/* Forms Modal Overlay */}
-      <AnimatePresence>
-        {showForm && (
-          <ShortcutForm
+      <Suspense fallback={null}>
+        <AnimatePresence>
+          {showForm && (
+            <ShortcutForm
             initialShortcut={editingShortcut}
             categories={categoryNamesList}
             onAddCategory={handleAddCategory}
@@ -1412,20 +1962,39 @@ export default function App() {
               setEditingShortcut(null);
             }}
             isEdit={editingShortcut !== null && shortcuts.some((s) => s.id === editingShortcut.id)}
-          />
-        )}
-      </AnimatePresence>
+            />
+          )}
+        </AnimatePresence>
 
-      {/* Folder Scan Modal Overlay */}
-      <AnimatePresence>
-        {showScanModal && (
-          <FolderScanModal
-            categories={categoryNamesList}
-            onImportShortcuts={handleImportPresets}
-            onClose={() => setShowScanModal(false)}
-          />
-        )}
-      </AnimatePresence>
+        {/* Folder Scan Modal Overlay */}
+        <AnimatePresence>
+          {showScanModal && (
+            <FolderScanModal
+              categories={categoryNamesList}
+              onImportShortcuts={handleImportPresets}
+              onClose={() => setShowScanModal(false)}
+            />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showMemoryDiagnostics && (
+            <MemoryDiagnostics onClose={() => setShowMemoryDiagnostics(false)} />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showDuplicateCleaner && (
+            <DuplicateCleaner
+              shortcuts={shortcuts}
+              canUndo={hasDuplicateBackup}
+              onClean={handleCleanExactDuplicates}
+              onUndo={handleUndoDuplicateCleanup}
+              onClose={() => setShowDuplicateCleaner(false)}
+            />
+          )}
+        </AnimatePresence>
+      </Suspense>
 
       {/* Launching Overlay / Modal */}
       <AnimatePresence>
@@ -1559,6 +2128,7 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-    </div>
+      </div>
+    </DndContext>
   );
 }

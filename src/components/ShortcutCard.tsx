@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Shortcut } from "../types";
-import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star } from "lucide-react";
+import { Play, Edit2, Trash2, Copy, Download, ExternalLink, Tag, Terminal, Check, GripVertical, Folder, Star, BookmarkPlus, BookmarkMinus, CheckSquare, Square } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -12,9 +12,17 @@ interface ShortcutCardProps {
   onDelete: (id: string) => void | Promise<void>;
   onLaunch: (shortcut: Shortcut) => void | Promise<void>;
   onToggleFavorite?: (id: string) => void;
+  onAddToWorkspace?: (id: string) => void;
+  onRemoveFromWorkspace?: (id: string) => void;
+  workspaceName?: string;
+  isInWorkspace?: boolean;
+  dndId?: string;
   viewMode?: "grid" | "list";
   sortMode?: "manual" | "alphabetical" | "date";
   isCompact?: boolean;
+  isSelectionMode?: boolean;
+  isSelected?: boolean;
+  onSelectionToggle?: (id: string) => void;
 }
 
 export default function ShortcutCard({ 
@@ -23,9 +31,17 @@ export default function ShortcutCard({
   onDelete, 
   onLaunch, 
   onToggleFavorite, 
+  onAddToWorkspace,
+  onRemoveFromWorkspace,
+  workspaceName,
+  isInWorkspace = false,
+  dndId,
   viewMode = "grid", 
   sortMode = "manual",
-  isCompact = false 
+  isCompact = false,
+  isSelectionMode = false,
+  isSelected = false,
+  onSelectionToggle,
 }: ShortcutCardProps) {
   const [copied, setCopied] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -50,14 +66,22 @@ export default function ShortcutCard({
     transition,
     isDragging,
   } = useSortable({
-    id: shortcut.id,
-    disabled: isCompact || sortMode !== "manual",
+    id: dndId || shortcut.id,
+    disabled: isCompact || isSelectionMode,
   });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : undefined,
+  };
+
+  const handleLaunchOrSelect = () => {
+    if (isSelectionMode && onSelectionToggle) {
+      onSelectionToggle(shortcut.id);
+      return;
+    }
+    onLaunch(shortcut);
   };
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -155,6 +179,32 @@ export default function ShortcutCard({
             <Star className={`h-3.5 w-3.5 ${shortcut.isFavorite ? "fill-amber-400 text-amber-400" : "text-neutral-400"}`} />
             {shortcut.isFavorite ? "Remove Favorite" : "Add Favorite"}
           </button>
+          {onAddToWorkspace && !isInWorkspace && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setContextMenu(null);
+                onAddToWorkspace(shortcut.id);
+              }}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-neutral-800/80 hover:text-white transition-all text-left w-full"
+            >
+              <BookmarkPlus className="h-3.5 w-3.5 text-amber-400" />
+              Add to {workspaceName || "workspace"}
+            </button>
+          )}
+          {onRemoveFromWorkspace && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setContextMenu(null);
+                onRemoveFromWorkspace(shortcut.id);
+              }}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-neutral-800/80 hover:text-white transition-all text-left w-full"
+            >
+              <BookmarkMinus className="h-3.5 w-3.5 text-amber-400" />
+              Remove from {workspaceName || "workspace"}
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -214,16 +264,25 @@ export default function ShortcutCard({
           }}
           className={`group relative flex items-center gap-2 overflow-hidden rounded-lg border border-neutral-850 bg-neutral-900/40 py-1.5 px-2.5 backdrop-blur-md transition-all hover:border-neutral-700 hover:bg-neutral-900/60 ${
             isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl ring-1 ring-amber-500/20" : ""
-          }`}
+          } ${isSelected ? "border-amber-500/50 bg-amber-500/5 ring-1 ring-amber-500/20" : ""}`}
           id={`shortcut-card-${shortcut.id}`}
         >
-          {/* Drag Handle */}
-          {sortMode === "manual" && (
+          {isSelectionMode ? (
+            <button
+              type="button"
+              onClick={() => onSelectionToggle?.(shortcut.id)}
+              className="flex shrink-0 items-center justify-center p-0.5 text-amber-400"
+              title={isSelected ? "Deselect shortcut" : "Select shortcut"}
+              aria-pressed={isSelected}
+            >
+              {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5 text-neutral-500" />}
+            </button>
+          ) : (
             <div
               {...attributes}
               {...listeners}
               className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors"
-              title="Drag to reorder"
+              title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
             >
               <GripVertical className="h-3.5 w-3.5" />
             </div>
@@ -232,14 +291,16 @@ export default function ShortcutCard({
           {/* Shortcut Icon (Clickable to Launch!) */}
           <div className="shrink-0">
             <div 
-              onClick={() => onLaunch(shortcut)}
+              onClick={handleLaunchOrSelect}
               className="relative shrink-0 cursor-pointer group/icon overflow-hidden rounded-md border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-8 w-8 items-center justify-center transition-all duration-200 hover:border-amber-500/50 hover:scale-105 active:scale-95 shadow-inner"
-              title={`Click to Launch ${shortcut.name}`}
+              title={isSelectionMode ? `Select ${shortcut.name}` : `Click to Launch ${shortcut.name}`}
             >
               {shortcut.iconUrl ? (
                 <img
                   src={shortcut.iconUrl}
                   alt={shortcut.name}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover transition-transform duration-200 group-hover/icon:scale-105"
                 />
@@ -265,6 +326,11 @@ export default function ShortcutCard({
                 <span className="shrink-0 px-1 py-0.2 rounded bg-neutral-950 text-[8px] font-mono uppercase text-neutral-500 tracking-wider">
                   {shortcut.category}
                 </span>
+                {(shortcut.workspaceTags || []).length > 0 && (
+                  <span className="shrink-0 px-1 py-0.2 rounded bg-amber-500/10 text-[8px] font-mono uppercase text-amber-400 tracking-wider">
+                    {1 + (shortcut.workspaceTags || []).length} groups
+                  </span>
+                )}
               </div>
               {shortcut.description && (
                 <p className="text-[9.5px] text-neutral-400 truncate mt-0.2 max-w-[180px]">
@@ -275,6 +341,18 @@ export default function ShortcutCard({
 
             {/* Quick Actions & Launch */}
             <div className="flex items-center gap-1.5 shrink-0 justify-end">
+              {onAddToWorkspace && !isInWorkspace && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddToWorkspace(shortcut.id);
+                  }}
+                  className="p-1 rounded text-neutral-500 hover:text-amber-400 hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                  title={`Add to ${workspaceName || "nominated workspace"}`}
+                >
+                  <BookmarkPlus className="h-3 w-3" />
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -325,103 +403,42 @@ export default function ShortcutCard({
 
   if (isCompact) {
     return (
-      <>
-        <motion.div
-          ref={setNodeRef}
-          style={style}
-          layout
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          whileHover={isDragging ? undefined : { y: -2, scale: 1.015 }}
-          transition={{ duration: 0.15 }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setContextMenu({ x: e.clientX, y: e.clientY });
-          }}
-          className={`group relative flex flex-col justify-center overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/40 p-2.5 backdrop-blur-md transition-all hover:border-neutral-700/80 hover:bg-neutral-900/70 hover:shadow-md ${
-            isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl" : ""
-          }`}
-          id={`shortcut-card-compact-${shortcut.id}`}
-        >
-          {/* Action overlay inside card - visible on hover or if favorited */}
-          <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-0.5">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleFavorite?.(shortcut.id);
-              }}
-              className={`p-1 rounded transition-all ${
-                shortcut.isFavorite
-                  ? "text-amber-400 hover:scale-110 opacity-100"
-                  : "text-neutral-500 hover:text-amber-400 opacity-0 group-hover:opacity-100"
-              }`}
-              title={shortcut.isFavorite ? "Remove from Favourites" : "Add to Favourites"}
-            >
-              <Star className={`h-3 w-3 ${shortcut.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit(shortcut);
-              }}
-              className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 transition-all opacity-0 group-hover:opacity-100"
-              title="Edit Shortcut"
-            >
-              <Edit2 className="h-2.5 w-2.5" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(shortcut.id);
-              }}
-              className="p-1 rounded text-neutral-400 hover:text-red-400 hover:bg-red-950/30 transition-all opacity-0 group-hover:opacity-100"
-              title="Delete Shortcut"
-            >
-              <Trash2 className="h-2.5 w-2.5" />
-            </button>
-          </div>
-
-          {/* Compact Click-to-Launch Body */}
-          <div 
-            onClick={() => onLaunch(shortcut)}
-            className="flex items-center gap-2.5 flex-1 cursor-pointer select-none"
-          >
-            {/* Icon */}
-            <div className="shrink-0">
-              <div className="relative overflow-hidden rounded-lg border border-neutral-850 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-9 w-9 items-center justify-center transition-all duration-200 hover:border-amber-500/30 shadow-inner">
-                {shortcut.iconUrl ? (
-                  <img
-                    src={shortcut.iconUrl}
-                    alt={shortcut.name}
-                    referrerPolicy="no-referrer"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-neutral-400">
-                    {isFolder ? <Folder className="h-4.5 w-4.5 text-amber-500/80" /> : <Terminal className="h-3.5 w-3.5" />}
-                  </div>
-                )}
-                {/* Overlay Play Indicator */}
-                <div className="absolute inset-0 bg-neutral-950/40 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity duration-150">
-                  <Play className="h-3 w-3 text-amber-400 fill-amber-400" />
-                </div>
-              </div>
-            </div>
-
-            {/* Title and Category */}
-            <div className="min-w-0 flex-1 pr-6 group-hover:pr-14 transition-all duration-150">
-              <h3 className="font-sans text-[11px] font-bold tracking-tight text-neutral-200 group-hover:text-white transition-colors leading-snug truncate" title={shortcut.name}>
-                {shortcut.name}
-              </h3>
-              <span className="inline-block mt-0.5 text-[8px] font-mono uppercase tracking-wider text-neutral-500 bg-neutral-950/60 px-1 py-0.2 rounded">
-                {shortcut.category}
-              </span>
-            </div>
-          </div>
-        </motion.div>
-        {renderContextMenu()}
-      </>
+      <motion.div
+        ref={setNodeRef}
+        style={style}
+        layout
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        whileHover={isDragging ? undefined : { y: -1, scale: 1.01 }}
+        transition={{ duration: 0.15 }}
+        onClick={() => onLaunch(shortcut)}
+        className={`group flex min-w-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/40 p-2 transition-all hover:border-amber-500/30 hover:bg-neutral-900/70 ${
+          isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl" : ""
+        }`}
+        id={`shortcut-card-compact-${shortcut.id}`}
+        title={`Launch ${shortcut.name}`}
+      >
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950">
+          {shortcut.iconUrl ? (
+            <img
+              src={shortcut.iconUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              className="h-full w-full object-contain"
+            />
+          ) : isFolder ? (
+            <Folder className="h-4 w-4 text-amber-500/80" />
+          ) : (
+            <Terminal className="h-3.5 w-3.5 text-neutral-400" />
+          )}
+        </div>
+        <h3 className="min-w-0 flex-1 truncate text-[11px] font-bold tracking-tight text-neutral-200 group-hover:text-white" title={shortcut.name}>
+          {shortcut.name}
+        </h3>
+      </motion.div>
     );
   }
 
@@ -442,25 +459,45 @@ export default function ShortcutCard({
         }}
         className={`group relative flex flex-col justify-between overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/50 p-3 backdrop-blur-md transition-all hover:border-neutral-700 hover:bg-neutral-900/85 hover:shadow-lg ${
           isDragging ? "border-amber-500/50 bg-neutral-900/90 shadow-2xl shadow-amber-500/5 ring-1 ring-amber-500/20" : ""
-        }`}
+        } ${isSelected ? "border-amber-500/50 bg-amber-500/5 ring-1 ring-amber-500/20" : ""}`}
         id={`shortcut-card-${shortcut.id}`}
       >
         {/* Top Controls Header */}
         <div className="flex items-center justify-between gap-1 text-neutral-500 h-5 shrink-0 select-none">
-          {sortMode === "manual" ? (
+          {isSelectionMode ? (
+            <button
+              type="button"
+              onClick={() => onSelectionToggle?.(shortcut.id)}
+              className="flex shrink-0 items-center justify-center p-0.5 text-amber-400"
+              title={isSelected ? "Deselect shortcut" : "Select shortcut"}
+              aria-pressed={isSelected}
+            >
+              {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5 text-neutral-500" />}
+            </button>
+          ) : (
             <div
               {...attributes}
               {...listeners}
               className="flex items-center justify-center p-0.5 text-neutral-600 hover:text-amber-400 cursor-grab active:cursor-grabbing transition-colors shrink-0"
-              title="Drag to reorder"
+              title={sortMode === "manual" ? "Drag to reorder or nominate" : "Drag to nominated workspace"}
             >
               <GripVertical className="h-3.5 w-3.5" />
             </div>
-          ) : (
-            <div />
           )}
 
           <div className="flex items-center gap-1 shrink-0">
+            {onAddToWorkspace && !isInWorkspace && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddToWorkspace(shortcut.id);
+                }}
+                className="p-1 rounded text-neutral-500 hover:text-amber-400 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                title={`Add to ${workspaceName || "nominated workspace"}`}
+              >
+                <BookmarkPlus className="h-3 w-3" />
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -502,14 +539,16 @@ export default function ShortcutCard({
           {/* Icon/Thumbnail placed above the title - Clicking it launches! */}
           <div className="shrink-0">
             <div 
-              onClick={() => onLaunch(shortcut)}
+              onClick={handleLaunchOrSelect}
               className="relative shrink-0 cursor-pointer group/icon overflow-hidden rounded-xl border border-neutral-800 bg-gradient-to-br from-neutral-800 to-neutral-950 flex h-11 w-11 items-center justify-center transition-all duration-200 hover:border-amber-500/50 hover:scale-105 active:scale-95 shadow-inner"
-              title={`Click to Launch ${shortcut.name}`}
+              title={isSelectionMode ? `Select ${shortcut.name}` : `Click to Launch ${shortcut.name}`}
             >
               {shortcut.iconUrl ? (
                 <img
                   src={shortcut.iconUrl}
                   alt={shortcut.name}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover transition-transform duration-200 group-hover/icon:scale-105"
                 />
@@ -549,9 +588,19 @@ export default function ShortcutCard({
           </div>
 
           {/* Tags */}
-          {shortcut.tags && shortcut.tags.length > 0 && (
+          {((shortcut.workspaceTags || []).length > 0 || (shortcut.tags && shortcut.tags.length > 0)) && (
             <div className="flex flex-wrap gap-1">
-              {shortcut.tags.slice(0, 2).map((tag) => (
+              {(shortcut.workspaceTags || []).slice(0, 2).map((workspace) => (
+                <span
+                  key={`workspace-${workspace}`}
+                  className="inline-flex items-center gap-0.5 rounded border border-amber-500/15 bg-amber-500/10 px-1 py-0.2 text-[8px] font-medium text-amber-400"
+                  title={`Additional group: ${workspace}`}
+                >
+                  <BookmarkPlus className="h-2 w-2" />
+                  {workspace}
+                </span>
+              ))}
+              {(shortcut.tags || []).slice(0, 2).map((tag) => (
                 <span
                   key={tag}
                   className="inline-flex items-center gap-0.5 rounded bg-neutral-950 px-1 py-0.2 text-[8px] font-medium text-neutral-400 border border-neutral-900"
