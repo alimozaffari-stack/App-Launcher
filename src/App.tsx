@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Shortcut } from "./types";
 import {
   Play,
   Plus,
   Search,
-  Sparkles,
   Layers,
   Tag,
   Loader2,
@@ -163,7 +162,8 @@ export default function App() {
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
-    // Convert dropped files into shortcuts
+    // Convert dropped files into shortcuts. Electron exposes the real native
+    // path through the isolated preload bridge; browsers do not expose it.
     const newShortcutsList = files.map((file: File) => {
       let baseName = file.name;
       const dotIndex = baseName.lastIndexOf(".");
@@ -176,23 +176,11 @@ export default function App() {
         .replace(/[-_.]/g, " ")
         .replace(/\b\w/g, (char) => char.toUpperCase());
 
-      let suggestedPath = "";
-      if (ext === "exe") {
-        if (baseName.toLowerCase() === "chrome") {
-          suggestedPath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-        } else if (baseName.toLowerCase() === "firefox") {
-          suggestedPath = "C:\\Program Files\\Mozilla Firefox\\firefox.exe";
-        } else if (baseName.toLowerCase() === "notepad") {
-          suggestedPath = "C:\\Windows\\System32\\notepad.exe";
-        } else if (baseName.toLowerCase() === "cmd") {
-          suggestedPath = "C:\\Windows\\System32\\cmd.exe";
-        } else {
-          suggestedPath = `C:\\Program Files\\${prettifiedName}\\${file.name}`;
-        }
-      } else if (ext === "lnk" || ext === "url") {
-        suggestedPath = `%USERPROFILE%\\Desktop\\${file.name}`;
-      } else {
-        suggestedPath = `C:\\Path\\To\\${file.name}`;
+      let nativePath = "";
+      try {
+        nativePath = window.appLauncherDesktop?.getPathForFile(file) || "";
+      } catch (error) {
+        console.warn("The native dropped-file path could not be read:", error);
       }
 
       let cat = selectedCategory !== "All" ? selectedCategory : "Others";
@@ -206,31 +194,43 @@ export default function App() {
 
       return {
         name: prettifiedName,
-        execPath: suggestedPath,
+        execPath: nativePath,
         category: cat,
         tags,
-        description: `Dropped & imported local file (${file.name}).`,
+        description: nativePath
+          ? `Imported local file (${file.name}).`
+          : `Dropped file (${file.name}); enter its full target path.`,
       };
     });
+
+    if (
+      newShortcutsList.length > 1 &&
+      newShortcutsList.some((shortcut) => !shortcut.execPath)
+    ) {
+      alert("Bulk file dropping requires the installed desktop application so native paths can be read.");
+      return;
+    }
 
     if (newShortcutsList.length === 1) {
       const firstItem = newShortcutsList[0];
       
       let extractedIconUrl: string | undefined = undefined;
-      try {
-        const response = await fetch("/api/extract-icon", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ execPath: firstItem.execPath }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.iconUrl) {
-            extractedIconUrl = data.iconUrl;
+      if (firstItem.execPath) {
+        try {
+          const response = await fetch("/api/extract-icon", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ execPath: firstItem.execPath }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.iconUrl) {
+              extractedIconUrl = data.iconUrl;
+            }
           }
+        } catch (error) {
+          console.warn("Automatic icon extraction failed:", error);
         }
-      } catch (err) {
-        console.warn("Auto extraction on drop failed (expected on cloud sandbox):", err);
       }
 
       const newShortcut: Shortcut = {
@@ -259,47 +259,85 @@ export default function App() {
     }
   };
 
-  // Load shortcuts and categories from localStorage on mount
+  // Recover older Electron storage when available, then load the current profile.
   useEffect(() => {
-    // 1. Categories
-    const storedCats = localStorage.getItem("launcher_categories");
-    let currentCats: CategoryDoc[] = [];
-    if (storedCats) {
-      try {
-        currentCats = JSON.parse(storedCats);
-      } catch (e) {
-        console.error("Error parsing stored categories:", e);
-      }
-    }
-    if (currentCats.length === 0) {
-      const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
-      currentCats = defaults.map((name, i) => ({ id: `cat-${Date.now()}-${i}`, name }));
-      localStorage.setItem("launcher_categories", JSON.stringify(currentCats));
-    }
-    setCategories(currentCats);
+    let cancelled = false;
 
-    // 2. Shortcuts
-    const storedShortcuts = localStorage.getItem("launcher_shortcuts");
-    let currentShortcuts: Shortcut[] = [];
-    if (storedShortcuts) {
+    const initialiseStoredData = async () => {
       try {
-        currentShortcuts = JSON.parse(storedShortcuts);
-      } catch (e) {
-        console.error("Error parsing stored shortcuts:", e);
+        const recovered = await window.appLauncherDesktop?.getRecoveredStorage();
+        if (recovered) {
+          let recoveredCount = 0;
+          for (const [key, value] of Object.entries(recovered)) {
+            if (localStorage.getItem(key) === null && value) {
+              localStorage.setItem(key, value);
+              recoveredCount += 1;
+            }
+          }
+          if (recoveredCount > 0) {
+            console.info(`Recovered ${recoveredCount} stored launcher settings.`);
+          }
+        }
+      } catch (error) {
+        console.warn("Older launcher data could not be recovered:", error);
       }
-    }
-    // Sort loaded shortcuts by order if it exists, fallback to createdAt descending
-    currentShortcuts.sort((a, b) => {
-      const aOrder = a.order !== undefined ? a.order : 999999;
-      const bOrder = b.order !== undefined ? b.order : 999999;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return b.createdAt - a.createdAt;
-    });
 
-    setShortcuts(currentShortcuts);
-    setLoading(false);
+      if (cancelled) return;
+
+      const storedViewMode = localStorage.getItem("launcher_view_mode");
+      if (storedViewMode === "grid" || storedViewMode === "list") {
+        setViewMode(storedViewMode);
+      }
+      const storedSortMode = localStorage.getItem("launcher_sort_mode");
+      if (storedSortMode === "manual" || storedSortMode === "alphabetical" || storedSortMode === "date") {
+        setSortMode(storedSortMode);
+      }
+      const storedNominatedCategory = localStorage.getItem("launcher_nominated_category");
+      if (storedNominatedCategory) setNominatedCategory(storedNominatedCategory);
+
+      const storedCats = localStorage.getItem("launcher_categories");
+      let currentCats: CategoryDoc[] = [];
+      if (storedCats) {
+        try {
+          const parsedCategories = JSON.parse(storedCats);
+          if (Array.isArray(parsedCategories)) currentCats = parsedCategories;
+        } catch (error) {
+          console.error("Error parsing stored categories:", error);
+        }
+      }
+      if (currentCats.length === 0) {
+        const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
+        currentCats = defaults.map((name, index) => ({ id: `cat-${Date.now()}-${index}`, name }));
+        localStorage.setItem("launcher_categories", JSON.stringify(currentCats));
+      }
+
+      const storedShortcuts = localStorage.getItem("launcher_shortcuts");
+      let currentShortcuts: Shortcut[] = [];
+      if (storedShortcuts) {
+        try {
+          const parsedShortcuts = JSON.parse(storedShortcuts);
+          if (Array.isArray(parsedShortcuts)) currentShortcuts = parsedShortcuts;
+        } catch (error) {
+          console.error("Error parsing stored shortcuts:", error);
+        }
+      }
+      currentShortcuts.sort((a, b) => {
+        const aOrder = a.order !== undefined ? a.order : 999999;
+        const bOrder = b.order !== undefined ? b.order : 999999;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+
+      if (cancelled) return;
+      setCategories(currentCats);
+      setShortcuts(currentShortcuts);
+      setLoading(false);
+    };
+
+    void initialiseStoredData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Save shortcut (Add / Update)
@@ -477,258 +515,6 @@ export default function App() {
     localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
   };
 
-  // Populate 21 Imaginary and Temporary Mock Shortcuts
-  const handlePopulateMockShortcuts = () => {
-    const mockData: Shortcut[] = [
-      {
-        id: "sc-mock-1",
-        name: "Gmail Inbox",
-        execPath: "https://mail.google.com",
-        category: "Office",
-        tags: ["email", "google", "workspace", "mock"],
-        description: "Quick access to your primary Gmail inbox and draft composer.",
-        iconUrl: "https://images.unsplash.com/photo-1557200134-90327ee9fafa?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 20,
-        order: 0
-      },
-      {
-        id: "sc-mock-2",
-        name: "Google Calendar",
-        execPath: "https://calendar.google.com",
-        category: "Office",
-        tags: ["schedule", "meetings", "calendar", "mock"],
-        description: "Unified schedule viewer with work and personal calendar layers.",
-        iconUrl: "https://images.unsplash.com/photo-1506784983877-45594efa4cbe?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 19,
-        order: 1
-      },
-      {
-        id: "sc-mock-3",
-        name: "Claude AI Assistant",
-        execPath: "https://claude.ai",
-        category: "AI",
-        tags: ["ai", "chat", "assistant", "mock"],
-        description: "Chat window for drafting communications and sorting lists.",
-        iconUrl: "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 18,
-        order: 2
-      },
-      {
-        id: "sc-mock-4",
-        name: "Deep Research Agent",
-        execPath: "https://ai.google.dev",
-        category: "AI",
-        tags: ["ai", "research", "agent", "mock"],
-        description: "Deep analysis agent for investigating news and generating reports.",
-        iconUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 17,
-        order: 3
-      },
-      {
-        id: "sc-mock-5",
-        name: "ChatGPT Pro",
-        execPath: "https://chatgpt.com",
-        category: "AI",
-        tags: ["ai", "chat", "gpt", "mock"],
-        description: "Quick access to GPT-4o for daily administrative tasks.",
-        iconUrl: "https://images.unsplash.com/photo-1677442136019-21780efad99a?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 16,
-        order: 4
-      },
-      {
-        id: "sc-mock-6",
-        name: "Gemini Advanced",
-        execPath: "https://gemini.google.com",
-        category: "AI",
-        tags: ["gemini", "google", "ai", "mock"],
-        description: "Google's premium assistant for workspace integration and analysis.",
-        iconUrl: "https://images.unsplash.com/photo-1614741118887-7a4ee193a5fa?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 15,
-        order: 5
-      },
-      {
-        id: "sc-mock-7",
-        name: "Obsidian Vault",
-        execPath: "obsidian://open?vault=personal",
-        category: "Research",
-        tags: ["notes", "markdown", "brain", "mock"],
-        description: "Local database of knowledge graphs and reference docs.",
-        iconUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 14,
-        order: 6
-      },
-      {
-        id: "sc-mock-8",
-        name: "Zotero Library",
-        execPath: "zotero://select/items/0_ABCD1234",
-        category: "Research",
-        tags: ["citations", "pdf", "sources", "mock"],
-        description: "Scientific sources, PDFs, and bibliography organizer.",
-        iconUrl: "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 13,
-        order: 7
-      },
-      {
-        id: "sc-mock-9",
-        name: "Adobe Photoshop",
-        execPath: "C:\\Program Files\\Adobe\\Adobe Photoshop 2024\\Photoshop.exe",
-        category: "Photography",
-        tags: ["editing", "adobe", "photo", "mock"],
-        description: "Creative photo and asset editor.",
-        iconUrl: "https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 12,
-        order: 8
-      },
-      {
-        id: "sc-mock-10",
-        name: "Lightroom Classic",
-        execPath: "C:\\Program Files\\Adobe\\Adobe Lightroom Classic\\Lightroom.exe",
-        category: "Photography",
-        tags: ["raw", "photo", "grading", "mock"],
-        description: "Batch photo grader and RAW development suite.",
-        iconUrl: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 11,
-        order: 9
-      },
-      {
-        id: "sc-mock-11",
-        name: "Figma Canvas",
-        execPath: "figma://file/my-workspace-file",
-        category: "Photography",
-        tags: ["design", "ui", "ux", "mock"],
-        description: "Collaborative design environment for mockups and assets.",
-        iconUrl: "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 10,
-        order: 10
-      },
-      {
-        id: "sc-mock-12",
-        name: "Kindle Reader",
-        execPath: "kindle://book?action=open",
-        category: "Books",
-        tags: ["reading", "ebooks", "epub", "mock"],
-        description: "Desktop reader for manual uploads, tutorials, and ebooks.",
-        iconUrl: "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 9,
-        order: 11
-      },
-      {
-        id: "sc-mock-13",
-        name: "Calibre E-Book",
-        execPath: "C:\\Program Files\\Calibre2\\calibre.exe",
-        category: "Books",
-        tags: ["library", "epub", "convert", "mock"],
-        description: "Powerful desktop digital library manager.",
-        iconUrl: "https://images.unsplash.com/photo-1512820790803-83ca734da794?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 8,
-        order: 12
-      },
-      {
-        id: "sc-mock-14",
-        name: "Steam Launcher",
-        execPath: "steam://open/main",
-        category: "Gaming",
-        tags: ["games", "store", "launcher", "mock"],
-        description: "Primary gaming hub and community platform.",
-        iconUrl: "https://images.unsplash.com/photo-1612287230202-1bf1d85d1bdf?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 7,
-        order: 13
-      },
-      {
-        id: "sc-mock-15",
-        name: "Cyberpunk 2077",
-        execPath: "steam://rungameid/1091500",
-        category: "Gaming",
-        tags: ["rpg", "action", "sci-fi", "mock"],
-        description: "Immersive open-world action-adventure RPG.",
-        iconUrl: "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 6,
-        order: 14
-      },
-      {
-        id: "sc-mock-16",
-        name: "Notion Workspace",
-        execPath: "notion://notion.so/dashboard",
-        category: "Office",
-        tags: ["notes", "tasks", "wiki", "mock"],
-        description: "Unified team workspace for docs, tasks, and roadmaps.",
-        iconUrl: "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 5,
-        order: 15
-      },
-      {
-        id: "sc-mock-17",
-        name: "Spotify Web Player",
-        execPath: "spotify://open",
-        category: "Others",
-        tags: ["music", "audio", "player", "mock"],
-        description: "Background music companion for deep-focus sessions.",
-        iconUrl: "https://images.unsplash.com/photo-1614680376593-902f74fa0d41?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 4,
-        order: 16
-      },
-      {
-        id: "sc-mock-18",
-        name: "Slack",
-        execPath: "slack://open",
-        category: "Office",
-        tags: ["chat", "team", "communication", "mock"],
-        description: "Real-time communication and channels for workspace collaboration.",
-        iconUrl: "https://images.unsplash.com/photo-1563986768609-322da13575f3?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 3,
-        order: 17
-      },
-      {
-        id: "sc-mock-19",
-        name: "Midjourney Web",
-        execPath: "https://www.midjourney.com",
-        category: "AI",
-        tags: ["ai", "images", "art", "mock"],
-        description: "Generative AI art platform for asset design.",
-        iconUrl: "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 2,
-        order: 18
-      },
-      {
-        id: "sc-mock-20",
-        name: "Google Sheets",
-        execPath: "https://sheets.google.com",
-        category: "Office",
-        tags: ["sheets", "spreadsheet", "data", "mock"],
-        description: "Daily task tracker, budgets, and calculation sheets.",
-        iconUrl: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 1,
-        order: 19
-      },
-      {
-        id: "sc-mock-21",
-        name: "Zoom Scheduler",
-        execPath: "zoommtg://zoom.us/join",
-        category: "Office",
-        tags: ["meetings", "calls", "video", "mock"],
-        description: "Quick link to start or schedule administrative meetings.",
-        iconUrl: "https://images.unsplash.com/photo-1588196749597-9ff075ee6b5b?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now(),
-        order: 20
-      }
-    ];
-
-    setShortcuts(mockData);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(mockData));
-
-    // Ensure default groups exist in state/localstorage too
-    const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
-    const baseCats = categories.length > 0 ? categories : defaults.map((name, i) => ({ id: `cat-${Date.now()}-${i}`, name }));
-    const finalCats = [...baseCats];
-    defaults.forEach((defName) => {
-      if (!finalCats.some(c => c.name.toLowerCase() === defName.toLowerCase())) {
-        finalCats.push({ id: `cat-added-${Math.random()}`, name: defName });
-      }
-    });
-    setCategories(finalCats);
-    localStorage.setItem("launcher_categories", JSON.stringify(finalCats));
-  };
-
   const handleClearAllShortcuts = () => {
     if (confirm("Are you sure you want to clear all shortcuts? This will reset the launcher to a fresh, blank state.")) {
       setShortcuts([]);
@@ -738,16 +524,6 @@ export default function App() {
 
   // Handle program launching
   const handleLaunch = async (shortcut: Shortcut) => {
-    // Record launch timestamp
-    const updated = shortcuts.map((s) => {
-      if (s.id === shortcut.id) {
-        return { ...s, lastLaunchedAt: Date.now() };
-      }
-      return s;
-    });
-    setShortcuts(updated);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-
     setLaunchingShortcut(shortcut);
     setLaunchStatus("connecting");
     setLaunchError("");
@@ -761,6 +537,16 @@ export default function App() {
 
       const result = await response.json();
       if (response.ok && result.success) {
+        // Record only successful launches in the recent-items panel.
+        setShortcuts((current) => {
+          const updated = current.map((item) =>
+            item.id === shortcut.id
+              ? { ...item, lastLaunchedAt: Date.now() }
+              : item,
+          );
+          localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
+          return updated;
+        });
         setLaunchStatus("success");
         // Auto close success modal in 1.8 seconds
         setTimeout(() => {
@@ -780,6 +566,10 @@ export default function App() {
   };
 
   const copyLaunchCommand = (pathStr: string) => {
+    if (/["\r\n]/.test(pathStr)) {
+      alert("This target contains characters that cannot be represented safely in a Windows command.");
+      return;
+    }
     const cmd = `start "" "${pathStr}"`;
     navigator.clipboard.writeText(cmd);
     setCopiedCmd(true);
@@ -787,6 +577,10 @@ export default function App() {
   };
 
   const downloadLaunchBat = (shortcut: Shortcut) => {
+    if (/["\r\n]/.test(shortcut.execPath)) {
+      alert("This target contains characters that cannot be represented safely in a batch file.");
+      return;
+    }
     const content = `@echo off\nstart "" "${shortcut.execPath}"\nexit`;
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -801,29 +595,38 @@ export default function App() {
   };
 
   // Get list of all unique tags to build a tag cloud or tag filters
-  const allTags = Array.from(
-    new Set(shortcuts.flatMap((s) => s.tags || []))
-  ).sort();
+  const allTags = useMemo(
+    () => Array.from(new Set(shortcuts.flatMap((s) => s.tags || []))).sort(),
+    [shortcuts],
+  );
 
   // Shortcuts sorted based on mode
-  const displayShortcuts = sortMode === "alphabetical"
-    ? [...shortcuts].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-    : sortMode === "date"
-    ? [...shortcuts].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-    : shortcuts;
+  const displayShortcuts = useMemo(
+    () =>
+      sortMode === "alphabetical"
+        ? [...shortcuts].sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+          )
+        : sortMode === "date"
+          ? [...shortcuts].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+          : shortcuts,
+    [shortcuts, sortMode],
+  );
 
   // Filtered Shortcuts
-  const filteredShortcuts = displayShortcuts.filter((s) => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    const matchesCategory =
-      selectedCategory === "All" || s.category === selectedCategory;
-
-    return matchesSearch && matchesCategory;
-  });
+  const filteredShortcuts = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return displayShortcuts.filter((shortcut) => {
+      const matchesSearch =
+        !normalizedQuery ||
+        shortcut.name.toLowerCase().includes(normalizedQuery) ||
+        shortcut.category.toLowerCase().includes(normalizedQuery) ||
+        shortcut.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery));
+      const matchesCategory =
+        selectedCategory === "All" || shortcut.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [displayShortcuts, searchQuery, selectedCategory]);
 
   const categoryNamesList = categories.map((c) => c.name);
 
@@ -923,16 +726,6 @@ export default function App() {
             >
               <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
               Import folder
-            </button>
-
-            {/* Populate 21 Mocks button */}
-            <button
-              onClick={handlePopulateMockShortcuts}
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-400 hover:bg-amber-500 hover:text-neutral-950 active:scale-95 transition-all shadow-md shadow-amber-500/5"
-              title="Populate with 21 Imaginary Mock Shortcuts"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-              Populate 21 Mocks
             </button>
 
             {shortcuts.length > 0 && (
@@ -1686,10 +1479,10 @@ export default function App() {
                     <Laptop className="h-5 w-5" />
                   </div>
                   <div className="text-left space-y-2">
-                    <h3 className="font-semibold text-white text-center mb-1">Local Bridge Required</h3>
+                    <h3 className="font-semibold text-white text-center mb-1">Target could not be launched</h3>
                     
                     <p className="text-xs text-neutral-400 leading-normal">
-                      You are previewing this app in the AI Studio cloud sandbox. Direct local execution is restricted by web browsers for security.
+                      The target is unavailable, its protocol is not registered, or this interface is running in a browser rather than the Windows desktop application.
                     </p>
                     
                     {launchError && (
@@ -1753,9 +1546,9 @@ export default function App() {
                     </div>
 
                     <div className="p-3 bg-neutral-900/40 border border-neutral-800/80 rounded-xl mt-4">
-                      <h4 className="text-[11px] font-bold text-white mb-0.5">💡 Direct Launching Tip:</h4>
+                      <h4 className="text-[11px] font-bold text-white mb-0.5">Launch check</h4>
                       <p className="text-[10px] text-neutral-400 leading-normal">
-                        To enable direct 1-click launching, click the export/settings icon in AI Studio, download this project as a ZIP, open it on your PC, and run <code className="font-mono bg-neutral-950 px-1 py-0.5 rounded text-neutral-300">npm run dev</code>. The launch button will work automatically!
+                        Confirm the saved path and ensure any custom protocol is installed. Direct launching requires the packaged Windows application or <code className="font-mono bg-neutral-950 px-1 py-0.5 rounded text-neutral-300">npm run desktop:start</code>.
                       </p>
                     </div>
 

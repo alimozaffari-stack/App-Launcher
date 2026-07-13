@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run desktop:build
+      - name: Smoke-test desktop startup
+        shell: pwsh
+        run: |
+          $stdout = Join-Path $env:RUNNER_TEMP "app-launcher-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "app-launcher-stderr.log"
+          $executable = Join-Path $PWD "dist-desktop\win-unpacked\App Launcher.exe"
+          if (-not (Test-Path -LiteralPath $executable)) {
+            throw "The packaged App Launcher executable was not found."
+          }
+          $process = Start-Process `
+            -FilePath $executable `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+          try {
+            Start-Sleep -Seconds 8
+            if ($process.HasExited) {
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw "Electron exited during the startup smoke test."
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: App-Launcher-Windows
+          path: dist-desktop/App-Launcher-*.exe
+          if-no-files-found: error

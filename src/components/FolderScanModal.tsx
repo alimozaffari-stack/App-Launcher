@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Search, Loader2, CheckSquare, Square, Folder, AlertTriangle, ChevronRight, HelpCircle, ArrowRight, Sparkles, Plus } from "lucide-react";
+import { X, Loader2, CheckSquare, Square, Folder, AlertTriangle } from "lucide-react";
 import { Shortcut } from "../types";
 
 interface ScannedShortcut {
@@ -8,6 +8,7 @@ interface ScannedShortcut {
   description: string;
   category: string;
   tags: string[];
+  iconUrl?: string;
   selected?: boolean;
 }
 
@@ -22,7 +23,6 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
   const [loading, setLoading] = useState(false);
   const [scannedItems, setScannedItems] = useState<ScannedShortcut[]>([]);
   const [scanMessage, setScanMessage] = useState("");
-  const [isSimulation, setIsSimulation] = useState(false);
   const [error, setError] = useState("");
   const [importing, setImporting] = useState(false);
 
@@ -55,8 +55,11 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
           selected: true,
         }));
         setScannedItems(items);
-        setIsSimulation(data.platform === "simulation");
-        setScanMessage(data.message || `Successfully scanned ${items.length} items!`);
+        setScanMessage(
+          items.length === 1
+            ? "Found 1 launchable item."
+            : `Found ${items.length} launchable items.`,
+        );
       }
     } catch (err: any) {
       console.error(err);
@@ -109,6 +112,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
         category: item.category,
         tags: item.tags,
         description: item.description,
+        iconUrl: item.iconUrl,
       }));
       await onImportShortcuts(shortcutsToImport);
       onClose();
@@ -149,7 +153,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                   required
                   value={folderPath}
                   onChange={(e) => setFolderPath(e.target.value)}
-                  placeholder="e.g. C:\Users\Username\Desktop or %USERPROFILE%\Desktop"
+                  placeholder="e.g. C:\Users\Username\Desktop"
                   className="flex-1 rounded-xl border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all font-mono"
                 />
                 <button
@@ -173,7 +177,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                 onClick={() => setFolderPath("%USERPROFILE%\\Desktop")}
                 className="hover:text-white underline font-mono"
               >
-                %USERPROFILE%\Desktop
+                Windows Desktop (personal + public)
               </button>
               <span>•</span>
               <button
@@ -197,20 +201,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
           {/* Info message */}
           {scanMessage && (
             <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300">
-              {isSimulation ? (
-                <div className="space-y-1.5">
-                  <p className="font-bold flex items-center gap-1 text-white">
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400 animate-pulse" />
-                    Sandbox Preview Mode Active
-                  </p>
-                  <p className="leading-relaxed text-neutral-400 text-[11px]">
-                    You are in the cloud preview environment, so we have simulated scanning your path to show how the shortcut-stripper automatically reads real executable details. 
-                    <strong> Download this app locally</strong> to run natively on your Windows PC!
-                  </p>
-                </div>
-              ) : (
-                <p>{scanMessage}</p>
-              )}
+              <p>{scanMessage}</p>
             </div>
           )}
 
@@ -257,6 +248,18 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                           <Square className="h-4 w-4 text-neutral-600" />
                         )}
                       </button>
+
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
+                        {item.iconUrl ? (
+                          <img
+                            src={item.iconUrl}
+                            alt=""
+                            className="h-full w-full object-contain p-1"
+                          />
+                        ) : (
+                          <Folder className="h-4 w-4 text-neutral-500" />
+                        )}
+                      </div>
 
                       <div className="space-y-1 flex-1 min-w-0">
                         <input

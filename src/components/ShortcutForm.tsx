@@ -32,6 +32,7 @@ export default function ShortcutForm({
   const [suggestError, setSuggestError] = useState("");
   const [extractingIcon, setExtractingIcon] = useState(false);
   const [extractIconError, setExtractIconError] = useState("");
+  const [targetError, setTargetError] = useState("");
 
   // Custom category addition inline
   const [showNewCatInput, setShowNewCatInput] = useState(false);
@@ -54,18 +55,42 @@ export default function ShortcutForm({
     }
   }, [initialShortcut, categories]);
 
-  // Handle local image upload to base64
+  // Resize uploaded artwork before storing it in localStorage. Full-size
+  // photographs can otherwise exhaust the browser storage quota quickly.
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          setIconUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 10 * 1024 * 1024) {
+      setExtractIconError("Choose an image smaller than 10 MB.");
+      return;
     }
+
+    setExtractIconError("");
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const maxSize = 128;
+        const scale = Math.min(maxSize / image.width, maxSize / image.height, 1);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Canvas is unavailable.");
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        setIconUrl(canvas.toDataURL("image/png"));
+      } catch (error) {
+        console.error("Icon resize failed:", error);
+        setExtractIconError("The selected image could not be processed.");
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      setExtractIconError("The selected image could not be read.");
+    };
+    image.src = objectUrl;
   };
 
   // Helper to extract icon from path
@@ -172,7 +197,12 @@ export default function ShortcutForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !execPath.trim()) return;
+    if (execPath.length > 4096 || /["\r\n]/.test(execPath)) {
+      setTargetError("Use one path or protocol target without quotes or line breaks.");
+      return;
+    }
 
+    setTargetError("");
     setLoading(true);
     const parsedTags = tagsInput
       .split(",")
@@ -252,14 +282,21 @@ export default function ShortcutForm({
             <input
               type="text"
               required
+              maxLength={4096}
               value={execPath}
-              onChange={(e) => setExecPath(e.target.value)}
+              onChange={(e) => {
+                setExecPath(e.target.value);
+                setTargetError("");
+              }}
               placeholder="e.g. C:\Users\YourName\Projects\MyProject, C:\Program Files\Game.exe, steam://run/1091500"
               className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all"
             />
             <p className="text-[10px] text-neutral-500 leading-normal">
               Enter the full Windows path (to a folder directory or executable file), website URL, or custom launcher protocol.
             </p>
+            {targetError && (
+              <p className="text-[10px] text-red-400 font-medium">{targetError}</p>
+            )}
           </div>
 
           {/* Group Category */}

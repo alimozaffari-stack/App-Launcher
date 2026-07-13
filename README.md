@@ -1,67 +1,61 @@
-# App Launcher (Desktop Client)
+# App Launcher
 
-A modern, standalone offline-first desktop launcher and storefront to catalog, organize, tag, and launch your applications, custom shortcuts, and protocol links. Built on a full-stack **React + Express** core and packaged cleanly as a native desktop application using **Electron**.
+A local-first Windows desktop launcher for applications, folders, shortcuts, websites and registered protocol links. The interface is built with React and packaged with Electron; a loopback-only Express service handles Windows integration.
 
----
+## Requirements
 
-## 🚀 How to Download & Run Locally
+- Windows 10 or 11, 64-bit
+- Node.js 22.12.0 or later
+- npm 10 or later
 
-Since this app is a fully integrated desktop application rather than a simple browser webpage, you can download the complete source code from Google AI Studio (as a ZIP or pushed directly to your GitHub repository) and run it natively on your machine.
+## Development
 
-### Prerequisites
-Make sure you have [Node.js](https://nodejs.org/) (v18 or higher) installed on your system.
-
-### 1. Extract & Install Dependencies
-Open your terminal or command prompt in the extracted directory and run:
-```bash
-npm install
-```
-*Note: This will automatically download and install the correct native version of Electron for your operating system (Windows, macOS, or Linux).*
-
-### 2. Configure Environment Variables (Optional)
-If your launcher uses external API keys (such as the Gemini API for smart categorization), create a `.env` file in the root directory:
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-### 3. Run the App Natively (Development Mode)
-To spin up the integrated backend server and launch the desktop container window:
-```bash
+```powershell
+npm ci
 npm run desktop:start
 ```
 
----
+`desktop:start` builds the React interface and local service before opening Electron. Development tools are available in this mode but disabled in packaged builds.
 
-## 📦 How to Package into a Standalone Executable (.exe, .dmg, .AppImage)
+To enable optional AI-assisted descriptions, set `GEMINI_API_KEY` in the environment or create a local `.env` file:
 
-To package all elements—the React frontend, the Express backend, and the Electron wrapper—into a single standalone installation file that can be distributed and installed like a normal application, run the build script:
+```dotenv
+GEMINI_API_KEY=your_key_here
+```
 
-### Build for your current OS:
-```bash
+The launcher itself does not require an API key.
+
+## Verification
+
+```powershell
+npm run check
+```
+
+This runs TypeScript validation, the production build and the local-server integration tests.
+
+## Windows installer
+
+```powershell
 npm run desktop:build
 ```
 
-### Build for specific platforms:
-* **Windows (produces a `.exe` installer):**
-  ```bash
-  npx electron-builder --win
-  ```
-* **macOS (produces a `.dmg` installer):**
-  ```bash
-  npx electron-builder --mac
-  ```
-* **Linux (produces a `.AppImage` package):**
-  ```bash
-  npx electron-builder --linux
-  ```
+The NSIS installer is written to `dist-desktop\`. The build is currently Windows-only because launching, icon extraction and folder scanning use Windows facilities.
 
-Once compilation is complete, you will find your production-ready installers in the newly created **`dist-desktop/`** directory.
+## Desktop behaviour
 
----
+- The local service binds only to `127.0.0.1:3000`; it is not exposed to the local network.
+- Electron waits for the service to be ready instead of relying on a startup delay.
+- Dropped files use their real native path through an isolated preload bridge.
+- Shortcut data remains on the device in the application profile.
+- An empty profile attempts a one-time recovery from earlier App Launcher profile names and loopback origins.
+- Desktop import follows Windows' personal and public Desktop locations, scans nested launchers and stores extracted icons.
+- Uploaded icon images are resized before storage.
+- External pages open in the operating system's default browser, not inside the privileged application window.
 
-## 🛠 Architecture & Tech Stack
+## Project structure
 
-This desktop client runs a multi-process architecture to keep the app sandboxed, fast, and secure:
-* **Frontend:** Built with **React 18**, **TypeScript**, and styled with high-performance utility classes using **Tailwind CSS**.
-* **Backend:** A lightweight local **Express** server (`server.ts` compiled to `dist/server.cjs`) that manages file configurations, protocol execution, and custom launch settings.
-* **Desktop Wrapper:** **Electron** (`electron-main.cjs`) which securely spins up the server in a separate thread and hosts the client interface within an optimized native OS window.
+- `electron-main.cjs` — Electron lifecycle and security boundary
+- `electron-preload.cjs` — narrow bridge for native dropped-file paths
+- `server.ts` — loopback API, Windows launch integration and static host
+- `src/` — React interface
+- `test/` — local-server integration tests
