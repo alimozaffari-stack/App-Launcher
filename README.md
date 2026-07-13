@@ -52,8 +52,10 @@ The NSIS installer is written to `dist-desktop\`. The build is currently Windows
 - Shortcut cards can belong to multiple groups. Dragging into the nominated workspace adds membership without changing the primary group.
 - The shortcut form can suggest up to three deterministic local tags for the user to review before saving.
 - Bulk selection can add, remove or replace tags; add or remove additional groups; and safely change the primary group across several shortcuts at once.
+- Duplicate review resolves Windows `.lnk` and `.url` targets, merges exact duplicates in one action without deleting files, preserves useful metadata and provides session undo. Name-only matches are review-only.
 - The nominated workspace can hold one-click temporary folder links for the current application session. A temporary link can be pinned as a permanent shortcut or removed at any time.
 - Uploaded icon images are resized before storage.
+- Optional dialogs and the AI SDK are loaded only when used; card icons decode lazily. The desktop-only Memory view reports current per-process usage on demand without background polling.
 - Workspace features reuse the existing renderer and local service; they add no background process or runtime dependency.
 - External pages open in the operating system's default browser, not inside the privileged application window.
 

@@ -24,6 +24,7 @@ import {
   Bookmark,
   ArrowDownAZ,
   ListChecks,
+  SearchCheck,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -46,6 +47,8 @@ import EmptyState from "./components/EmptyState";
 import NominatedWorkspaceDropZone from "./components/NominatedWorkspaceDropZone";
 import TemporaryFolderCard from "./components/TemporaryFolderCard";
 import type { BulkShortcutAction } from "./components/BulkEditPanel";
+import type { DuplicateGroup } from "./components/DuplicateCleaner";
+import { cleanExactDuplicates } from "./duplicates.js";
 import {
   NOMINATED_CARD_PREFIX,
   addShortcutToWorkspace,
@@ -60,6 +63,9 @@ const BulkEditPanel = lazy(() => import("./components/BulkEditPanel"));
 const FolderScanModal = lazy(() => import("./components/FolderScanModal"));
 const MemoryDiagnostics = lazy(() => import("./components/MemoryDiagnostics"));
 const ShortcutForm = lazy(() => import("./components/ShortcutForm"));
+const DuplicateCleaner = lazy(() => import("./components/DuplicateCleaner"));
+
+const DUPLICATE_BACKUP_KEY = "launcher_duplicate_cleanup_backup";
 
 interface CategoryDoc {
   id: string;
@@ -83,6 +89,10 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [showScanModal, setShowScanModal] = useState(false);
   const [showMemoryDiagnostics, setShowMemoryDiagnostics] = useState(false);
+  const [showDuplicateCleaner, setShowDuplicateCleaner] = useState(false);
+  const [hasDuplicateBackup, setHasDuplicateBackup] = useState(
+    () => Boolean(sessionStorage.getItem(DUPLICATE_BACKUP_KEY)),
+  );
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
   const [isBulkMode, setIsBulkMode] = useState(false);
@@ -151,6 +161,58 @@ export default function App() {
       }
       return updated;
     });
+  };
+
+  const handleCleanExactDuplicates = (groups: DuplicateGroup[]) => {
+    const removableCount = groups.reduce(
+      (count, group) => count + Math.max(0, group.shortcutIds.length - 1),
+      0,
+    );
+    if (
+      removableCount === 0 ||
+      !confirm(
+        `Merge ${removableCount} redundant ${removableCount === 1 ? "card" : "cards"}? Tags, groups, favourites, icons and recent-use details will be preserved. No files will be deleted.`,
+      )
+    ) return;
+
+    const affectedIds = new Set(groups.flatMap((group) => group.shortcutIds));
+    const affectedShortcuts = shortcuts.filter((shortcut) => affectedIds.has(shortcut.id));
+    try {
+      sessionStorage.setItem(
+        DUPLICATE_BACKUP_KEY,
+        JSON.stringify({ shortcuts: affectedShortcuts }),
+      );
+    } catch (error) {
+      console.error("Could not create duplicate-cleanup backup:", error);
+      alert("Cleanup was cancelled because an undo backup could not be created.");
+      return;
+    }
+
+    const result = cleanExactDuplicates(shortcuts, groups);
+    setShortcuts(result.shortcuts);
+    localStorage.setItem("launcher_shortcuts", JSON.stringify(result.shortcuts));
+    setSelectedShortcutIds(new Set());
+    setHasDuplicateBackup(true);
+  };
+
+  const handleUndoDuplicateCleanup = () => {
+    try {
+      const rawBackup = sessionStorage.getItem(DUPLICATE_BACKUP_KEY);
+      const backup = rawBackup ? JSON.parse(rawBackup) : null;
+      if (!Array.isArray(backup?.shortcuts)) throw new Error("The undo backup is invalid.");
+      const originals = backup.shortcuts as Shortcut[];
+      const restoredIds = new Set(originals.map((shortcut) => shortcut.id));
+      const restored = [...shortcuts.filter((shortcut) => !restoredIds.has(shortcut.id)), ...originals]
+        .sort((first, second) => (first.order ?? Number.MAX_SAFE_INTEGER) - (second.order ?? Number.MAX_SAFE_INTEGER))
+        .map((shortcut, index) => ({ ...shortcut, order: index }));
+      setShortcuts(restored);
+      localStorage.setItem("launcher_shortcuts", JSON.stringify(restored));
+      sessionStorage.removeItem(DUPLICATE_BACKUP_KEY);
+      setHasDuplicateBackup(false);
+    } catch (error) {
+      console.error("Could not restore duplicate-cleanup backup:", error);
+      alert("The last duplicate cleanup could not be restored.");
+    }
   };
 
   useEffect(() => {
@@ -1051,6 +1113,16 @@ export default function App() {
           <div className="flex w-full shrink-0 items-center gap-2 xl:w-auto">
             <button
               type="button"
+              onClick={() => setShowDuplicateCleaner(true)}
+              disabled={shortcuts.length < 2}
+              className="inline-flex h-[40px] items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900/40 px-3 text-[10px] font-bold uppercase tracking-wider text-neutral-400 transition-colors hover:border-neutral-700 hover:text-white disabled:opacity-40"
+            >
+              <SearchCheck className="h-3.5 w-3.5" />
+              Duplicates
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 if (isBulkMode) handleExitBulkMode();
                 else setIsBulkMode(true);
@@ -1692,6 +1764,18 @@ export default function App() {
         <AnimatePresence>
           {showMemoryDiagnostics && (
             <MemoryDiagnostics onClose={() => setShowMemoryDiagnostics(false)} />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showDuplicateCleaner && (
+            <DuplicateCleaner
+              shortcuts={shortcuts}
+              canUndo={hasDuplicateBackup}
+              onClean={handleCleanExactDuplicates}
+              onUndo={handleUndoDuplicateCleanup}
+              onClose={() => setShowDuplicateCleaner(false)}
+            />
           )}
         </AnimatePresence>
       </Suspense>

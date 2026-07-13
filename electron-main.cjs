@@ -133,6 +133,97 @@ ipcMain.handle("app-launcher:get-process-metrics", () =>
     privateKb: Number(metric.memory?.privateBytes || 0),
   })),
 );
+
+function expandWindowsEnvironment(value) {
+  return String(value || "").replace(/%([^%]+)%/g, (match, name) => {
+    const environmentValue = process.env[name] ?? process.env[name.toUpperCase()];
+    return environmentValue === undefined ? match : environmentValue;
+  });
+}
+
+function normalizeWindowsTarget(value) {
+  return path.win32
+    .normalize(expandWindowsEnvironment(value).trim())
+    .replace(/[\\/]+$/, "")
+    .toLowerCase();
+}
+
+function canonicalWebTarget(value) {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveDuplicateTarget(execPath) {
+  const rawTarget = String(execPath || "").trim();
+  if (!rawTarget) return null;
+  const webTarget = canonicalWebTarget(rawTarget);
+  if (webTarget) return { key: `url:${webTarget}`, resolvedTarget: webTarget };
+
+  const protocol = rawTarget.match(/^([a-z][a-z\d+.-]*:)/i)?.[1];
+  if (protocol && !/^[a-z]:$/i.test(protocol)) {
+    const target = `${protocol.toLowerCase()}${rawTarget.slice(protocol.length)}`;
+    return { key: `protocol:${target}`, resolvedTarget: target };
+  }
+
+  const expandedPath = expandWindowsEnvironment(rawTarget);
+  const extension = path.win32.extname(expandedPath).toLowerCase();
+  if (process.platform === "win32" && extension === ".lnk") {
+    try {
+      const shortcut = shell.readShortcutLink(expandedPath);
+      const target = normalizeWindowsTarget(shortcut.target);
+      if (target) {
+        const args = String(shortcut.args || "").trim();
+        const workingDirectory = normalizeWindowsTarget(shortcut.cwd || "");
+        return {
+          key: `target:${target}|args:${args}|cwd:${workingDirectory}`,
+          resolvedTarget: shortcut.target,
+        };
+      }
+    } catch (error) {
+      console.warn(`Could not resolve shortcut target ${expandedPath}:`, error);
+    }
+  }
+
+  if (extension === ".url") {
+    try {
+      const contents = await fs.promises.readFile(expandedPath, "utf8");
+      const urlLine = contents.match(/^URL=(.+)$/im)?.[1]?.trim();
+      const urlTarget = urlLine ? canonicalWebTarget(urlLine) : null;
+      if (urlTarget) return { key: `url:${urlTarget}`, resolvedTarget: urlTarget };
+    } catch (error) {
+      console.warn(`Could not resolve internet shortcut ${expandedPath}:`, error);
+    }
+  }
+
+  const fileTarget = normalizeWindowsTarget(expandedPath);
+  return fileTarget ? { key: `path:${fileTarget}`, resolvedTarget: expandedPath } : null;
+}
+
+ipcMain.handle("app-launcher:resolve-shortcut-targets", async (_event, candidates) => {
+  if (!Array.isArray(candidates) || candidates.length > 2000) return [];
+  const results = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (
+      !candidate ||
+      typeof candidate.id !== "string" ||
+      candidate.id.length > 200 ||
+      typeof candidate.execPath !== "string" ||
+      candidate.execPath.length > 4096
+    ) continue;
+    const resolved = await resolveDuplicateTarget(candidate.execPath);
+    if (resolved) results.push({ id: candidate.id, ...resolved, confidence: "exact" });
+    if (index > 0 && index % 40 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  return results;
+});
 ipcMain.handle("app-launcher:select-folder", async () => {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
   const result = await dialog.showOpenDialog(mainWindow, {

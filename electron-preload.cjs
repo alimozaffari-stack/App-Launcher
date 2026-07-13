@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld("appLauncherDesktop", {
   getProcessMetrics() {
     return ipcRenderer.invoke("app-launcher:get-process-metrics");
   },
+  resolveShortcutTargets(candidates) {
+    return ipcRenderer.invoke("app-launcher:resolve-shortcut-targets", candidates);
+  },
   selectFolder() {
     return ipcRenderer.invoke("app-launcher:select-folder");
   },
