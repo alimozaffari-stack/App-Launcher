@@ -96,6 +96,11 @@ test(
         `[InternetShortcut]\nURL=https://example.com\nIconFile=${process.execPath}\nIconIndex=0\n`,
         "utf8",
       );
+      await writeFile(
+        path.join(fixtureRoot, "Shell Fallback Website.url"),
+        "[InternetShortcut]\nURL=https://example.com/fallback\nIconFile=C:\\missing\\icon.exe\nIconIndex=0\n",
+        "utf8",
+      );
 
       const response = await fetch(`${running.url}/api/scan-folder`, {
         method: "POST",
@@ -105,7 +110,7 @@ test(
       assert.equal(response.status, 200);
       const result = await response.json();
       assert.equal(result.success, true);
-      assert.equal(result.shortcuts.length, 2);
+      assert.equal(result.shortcuts.length, 3);
       for (const shortcut of result.shortcuts) {
         assert.match(shortcut.iconUrl || "", /^data:image\/png;base64,/);
       }

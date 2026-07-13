@@ -312,6 +312,51 @@ Return only JSON matching the supplied schema.`;
 
     const script = `
       Add-Type -AssemblyName System.Drawing
+      Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class LauncherShellIcons {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct SHFILEINFO {
+    public IntPtr hIcon;
+    public int iIcon;
+    public uint dwAttributes;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+    public string szDisplayName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+    public string szTypeName;
+  }
+
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+  public static extern IntPtr SHGetFileInfo(
+    string pszPath,
+    uint dwFileAttributes,
+    ref SHFILEINFO psfi,
+    uint cbFileInfo,
+    uint uFlags
+  );
+
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool DestroyIcon(IntPtr hIcon);
+}
+'@
+
+      function Convert-LauncherIconToDataUrl([System.Drawing.Icon] $icon) {
+        $bitmap = $icon.ToBitmap()
+        try {
+          $stream = New-Object System.IO.MemoryStream
+          try {
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+            return "data:image/png;base64,$([Convert]::ToBase64String($stream.ToArray()))"
+          } finally {
+            $stream.Dispose()
+          }
+        } finally {
+          $bitmap.Dispose()
+        }
+      }
 
       function Get-LauncherIconDataUrl([string] $source) {
         try {
@@ -325,23 +370,45 @@ Return only JSON matching the supplied schema.`;
           $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expandedSource)
           if ($null -eq $icon) { return $null }
           try {
-            $bitmap = $icon.ToBitmap()
-            try {
-              $stream = New-Object System.IO.MemoryStream
-              try {
-                $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-                return "data:image/png;base64,$([Convert]::ToBase64String($stream.ToArray()))"
-              } finally {
-                $stream.Dispose()
-              }
-            } finally {
-              $bitmap.Dispose()
-            }
+            return Convert-LauncherIconToDataUrl $icon
           } finally {
             $icon.Dispose()
           }
         } catch {
           return $null
+        }
+      }
+
+      function Get-LauncherShellIconDataUrl([string] $source) {
+        $icon = $null
+        $iconHandle = [IntPtr]::Zero
+        try {
+          if ([string]::IsNullOrWhiteSpace($source)) { return $null }
+          $expandedSource = [Environment]::ExpandEnvironmentVariables($source.Trim().Trim('"'))
+          if (-not [System.IO.File]::Exists($expandedSource)) { return $null }
+
+          $iconInfo = New-Object LauncherShellIcons+SHFILEINFO
+          $result = [LauncherShellIcons]::SHGetFileInfo(
+            $expandedSource,
+            0,
+            [ref] $iconInfo,
+            [System.Runtime.InteropServices.Marshal]::SizeOf($iconInfo),
+            0x100
+          )
+          if ($result -eq [IntPtr]::Zero -or $iconInfo.hIcon -eq [IntPtr]::Zero) {
+            return $null
+          }
+
+          $iconHandle = $iconInfo.hIcon
+          $icon = [System.Drawing.Icon]::FromHandle($iconHandle).Clone()
+          return Convert-LauncherIconToDataUrl $icon
+        } catch {
+          return $null
+        } finally {
+          if ($null -ne $icon) { $icon.Dispose() }
+          if ($iconHandle -ne [IntPtr]::Zero) {
+            [void] [LauncherShellIcons]::DestroyIcon($iconHandle)
+          }
         }
       }
 
@@ -377,6 +444,7 @@ Return only JSON matching the supplied schema.`;
         try {
           $description = "Imported Windows launcher."
           $iconSource = $file.FullName
+          $targetIconSource = $null
 
           if ($file.Extension -ieq ".lnk") {
             $shortcut = $shell.CreateShortcut($file.FullName)
@@ -385,7 +453,12 @@ Return only JSON matching the supplied schema.`;
             }
             if (-not [string]::IsNullOrWhiteSpace($shortcut.IconLocation)) {
               $iconSource = $shortcut.IconLocation
-            } elseif (-not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+            }
+            if (-not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+              $targetIconSource = $shortcut.TargetPath
+            }
+            if ([string]::IsNullOrWhiteSpace($shortcut.IconLocation) -and
+                -not [string]::IsNullOrWhiteSpace($targetIconSource)) {
               $iconSource = $shortcut.TargetPath
             }
           } elseif ($file.Extension -ieq ".url") {
@@ -404,13 +477,23 @@ Return only JSON matching the supplied schema.`;
             $description = "ClickOnce application launcher."
           }
 
+          $iconUrl = Get-LauncherIconDataUrl $iconSource
+          if ([string]::IsNullOrWhiteSpace($iconUrl) -and
+              -not [string]::IsNullOrWhiteSpace($targetIconSource) -and
+              $targetIconSource -ne $iconSource) {
+            $iconUrl = Get-LauncherIconDataUrl $targetIconSource
+          }
+          if ([string]::IsNullOrWhiteSpace($iconUrl)) {
+            $iconUrl = Get-LauncherShellIconDataUrl $file.FullName
+          }
+
           $results += [PSCustomObject]@{
             name = $file.BaseName
             execPath = $file.FullName
             description = $description
             category = "Others"
             tags = @($file.BaseName.ToLowerInvariant())
-            iconUrl = Get-LauncherIconDataUrl $iconSource
+            iconUrl = $iconUrl
           }
         } catch {}
       }
