@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { after, before, test } from "node:test";
 
 process.env.APP_LAUNCHER_EMBEDDED = "1";
@@ -41,6 +44,13 @@ test("reports local server health", async () => {
   });
 });
 
+test("serves a blank no-cache storage migration document", async () => {
+  const response = await fetch(`${running.url}/migration-storage`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.doesNotMatch(await response.text(), /id=["']root["']/);
+});
+
 test("rejects foreign browser origins", async () => {
   const response = await fetch(`${running.url}/api/health`, {
     headers: { Origin: "https://example.invalid" },
@@ -70,3 +80,37 @@ test("does not expose the bundled server source", async () => {
   const response = await fetch(`${running.url}/server.cjs`);
   assert.equal(response.status, 404);
 });
+
+test(
+  "scans nested Windows launchers and returns their extracted icons",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const fixtureRoot = await mkdtemp(path.join(tmpdir(), "app-launcher-scan-"));
+    try {
+      const nestedFolder = path.join(fixtureRoot, "Nested");
+      await mkdir(nestedFolder);
+      const executablePath = path.join(nestedFolder, "Fixture App.exe");
+      await copyFile(process.execPath, executablePath);
+      await writeFile(
+        path.join(fixtureRoot, "Fixture Website.url"),
+        `[InternetShortcut]\nURL=https://example.com\nIconFile=${process.execPath}\nIconIndex=0\n`,
+        "utf8",
+      );
+
+      const response = await fetch(`${running.url}/api/scan-folder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderPath: fixtureRoot }),
+      });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.success, true);
+      assert.equal(result.shortcuts.length, 2);
+      for (const shortcut of result.shortcuts) {
+        assert.match(shortcut.iconUrl || "", /^data:image\/png;base64,/);
+      }
+    } finally {
+      await rm(fixtureRoot, { force: true, recursive: true });
+    }
+  },
+);

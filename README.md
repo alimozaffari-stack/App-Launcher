@@ -47,6 +47,8 @@ The NSIS installer is written to `dist-desktop\`. The build is currently Windows
 - Electron waits for the service to be ready instead of relying on a startup delay.
 - Dropped files use their real native path through an isolated preload bridge.
 - Shortcut data remains on the device in the application profile.
+- An empty profile attempts a one-time recovery from earlier App Launcher profile names and loopback origins.
+- Desktop import follows Windows' personal and public Desktop locations, scans nested launchers and stores extracted icons.
 - Uploaded icon images are resized before storage.
 - External pages open in the operating system's default browser, not inside the privileged application window.
 

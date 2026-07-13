@@ -1,11 +1,20 @@
+const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
 
 const DESKTOP_PORT = 3000;
+const STORED_SETTING_KEYS = [
+  "launcher_shortcuts",
+  "launcher_categories",
+  "launcher_view_mode",
+  "launcher_nominated_category",
+  "launcher_sort_mode",
+];
 
 let backendServer = null;
 let backendUrl = null;
 let mainWindow = null;
+let recoveredStorage = {};
 
 async function startExpressServer() {
   process.env.APP_LAUNCHER_EMBEDDED = "1";
@@ -24,6 +33,92 @@ async function startExpressServer() {
   backendServer = running.server;
   backendUrl = running.url;
 }
+
+function preferStoredValue(key, currentValue, candidateValue) {
+  if (!candidateValue) return currentValue;
+  if (!currentValue) return candidateValue;
+  if (!["launcher_shortcuts", "launcher_categories"].includes(key)) {
+    return currentValue;
+  }
+
+  try {
+    const currentItems = JSON.parse(currentValue);
+    const candidateItems = JSON.parse(candidateValue);
+    if (Array.isArray(candidateItems) &&
+        (!Array.isArray(currentItems) || candidateItems.length > currentItems.length)) {
+      return candidateValue;
+    }
+  } catch {
+    // Keep the first parseable value. The renderer validates it again.
+  }
+  return currentValue;
+}
+
+async function readStorageSnapshot(browserSession, origin) {
+  const migrationWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      devTools: false,
+      nodeIntegration: false,
+      sandbox: true,
+      session: browserSession,
+    },
+  });
+
+  try {
+    await migrationWindow.loadURL(`${origin}/migration-storage`);
+    return await migrationWindow.webContents.executeJavaScript(`
+      (() => {
+        const keys = ${JSON.stringify(STORED_SETTING_KEYS)};
+        return Object.fromEntries(
+          keys.map((key) => [key, localStorage.getItem(key)])
+            .filter(([, value]) => typeof value === "string" && value.length > 0)
+        );
+      })()
+    `);
+  } catch (error) {
+    console.warn(`Could not inspect legacy storage at ${origin}:`, error);
+    return {};
+  } finally {
+    if (!migrationWindow.isDestroyed()) migrationWindow.destroy();
+  }
+}
+
+async function recoverLegacyStorage() {
+  const origins = ["localhost", "127.0.0.1"].map(
+    (hostname) => `http://${hostname}:${DESKTOP_PORT}`,
+  );
+  const sessions = [session.defaultSession];
+  const currentUserData = path.resolve(app.getPath("userData")).toLowerCase();
+  const appData = app.getPath("appData");
+
+  for (const directoryName of ["app-launcher", "App Launcher", "AppLauncher"]) {
+    const candidate = path.join(appData, directoryName);
+    if (path.resolve(candidate).toLowerCase() === currentUserData) continue;
+    if (!fs.existsSync(path.join(candidate, "Local Storage"))) continue;
+    try {
+      sessions.push(session.fromPath(candidate, { cache: false }));
+    } catch (error) {
+      console.warn(`Could not open legacy application profile ${candidate}:`, error);
+    }
+  }
+
+  const merged = {};
+  for (const browserSession of sessions) {
+    for (const origin of origins) {
+      const snapshot = await readStorageSnapshot(browserSession, origin);
+      for (const key of STORED_SETTING_KEYS) {
+        merged[key] = preferStoredValue(key, merged[key], snapshot[key]);
+      }
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => typeof value === "string"),
+  );
+}
+
+ipcMain.handle("app-launcher:get-recovered-storage", () => recoveredStorage);
 
 function isSafeExternalUrl(rawUrl) {
   try {
@@ -156,6 +251,7 @@ if (!gotTheLock) {
   app.whenReady()
     .then(async () => {
       await startExpressServer();
+      recoveredStorage = await recoverLegacyStorage();
       createWindow();
 
       app.on("activate", () => {

@@ -259,47 +259,85 @@ export default function App() {
     }
   };
 
-  // Load shortcuts and categories from localStorage on mount
+  // Recover older Electron storage when available, then load the current profile.
   useEffect(() => {
-    // 1. Categories
-    const storedCats = localStorage.getItem("launcher_categories");
-    let currentCats: CategoryDoc[] = [];
-    if (storedCats) {
-      try {
-        currentCats = JSON.parse(storedCats);
-      } catch (e) {
-        console.error("Error parsing stored categories:", e);
-      }
-    }
-    if (currentCats.length === 0) {
-      const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
-      currentCats = defaults.map((name, i) => ({ id: `cat-${Date.now()}-${i}`, name }));
-      localStorage.setItem("launcher_categories", JSON.stringify(currentCats));
-    }
-    setCategories(currentCats);
+    let cancelled = false;
 
-    // 2. Shortcuts
-    const storedShortcuts = localStorage.getItem("launcher_shortcuts");
-    let currentShortcuts: Shortcut[] = [];
-    if (storedShortcuts) {
+    const initialiseStoredData = async () => {
       try {
-        currentShortcuts = JSON.parse(storedShortcuts);
-      } catch (e) {
-        console.error("Error parsing stored shortcuts:", e);
+        const recovered = await window.appLauncherDesktop?.getRecoveredStorage();
+        if (recovered) {
+          let recoveredCount = 0;
+          for (const [key, value] of Object.entries(recovered)) {
+            if (localStorage.getItem(key) === null && value) {
+              localStorage.setItem(key, value);
+              recoveredCount += 1;
+            }
+          }
+          if (recoveredCount > 0) {
+            console.info(`Recovered ${recoveredCount} stored launcher settings.`);
+          }
+        }
+      } catch (error) {
+        console.warn("Older launcher data could not be recovered:", error);
       }
-    }
-    // Sort loaded shortcuts by order if it exists, fallback to createdAt descending
-    currentShortcuts.sort((a, b) => {
-      const aOrder = a.order !== undefined ? a.order : 999999;
-      const bOrder = b.order !== undefined ? b.order : 999999;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return b.createdAt - a.createdAt;
-    });
 
-    setShortcuts(currentShortcuts);
-    setLoading(false);
+      if (cancelled) return;
+
+      const storedViewMode = localStorage.getItem("launcher_view_mode");
+      if (storedViewMode === "grid" || storedViewMode === "list") {
+        setViewMode(storedViewMode);
+      }
+      const storedSortMode = localStorage.getItem("launcher_sort_mode");
+      if (storedSortMode === "manual" || storedSortMode === "alphabetical" || storedSortMode === "date") {
+        setSortMode(storedSortMode);
+      }
+      const storedNominatedCategory = localStorage.getItem("launcher_nominated_category");
+      if (storedNominatedCategory) setNominatedCategory(storedNominatedCategory);
+
+      const storedCats = localStorage.getItem("launcher_categories");
+      let currentCats: CategoryDoc[] = [];
+      if (storedCats) {
+        try {
+          const parsedCategories = JSON.parse(storedCats);
+          if (Array.isArray(parsedCategories)) currentCats = parsedCategories;
+        } catch (error) {
+          console.error("Error parsing stored categories:", error);
+        }
+      }
+      if (currentCats.length === 0) {
+        const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
+        currentCats = defaults.map((name, index) => ({ id: `cat-${Date.now()}-${index}`, name }));
+        localStorage.setItem("launcher_categories", JSON.stringify(currentCats));
+      }
+
+      const storedShortcuts = localStorage.getItem("launcher_shortcuts");
+      let currentShortcuts: Shortcut[] = [];
+      if (storedShortcuts) {
+        try {
+          const parsedShortcuts = JSON.parse(storedShortcuts);
+          if (Array.isArray(parsedShortcuts)) currentShortcuts = parsedShortcuts;
+        } catch (error) {
+          console.error("Error parsing stored shortcuts:", error);
+        }
+      }
+      currentShortcuts.sort((a, b) => {
+        const aOrder = a.order !== undefined ? a.order : 999999;
+        const bOrder = b.order !== undefined ? b.order : 999999;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+
+      if (cancelled) return;
+      setCategories(currentCats);
+      setShortcuts(currentShortcuts);
+      setLoading(false);
+    };
+
+    void initialiseStoredData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Save shortcut (Add / Update)

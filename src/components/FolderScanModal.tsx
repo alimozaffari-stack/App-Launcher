@@ -8,6 +8,7 @@ interface ScannedShortcut {
   description: string;
   category: string;
   tags: string[];
+  iconUrl?: string;
   selected?: boolean;
 }
 
@@ -111,6 +112,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
         category: item.category,
         tags: item.tags,
         description: item.description,
+        iconUrl: item.iconUrl,
       }));
       await onImportShortcuts(shortcutsToImport);
       onClose();
@@ -151,7 +153,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                   required
                   value={folderPath}
                   onChange={(e) => setFolderPath(e.target.value)}
-                  placeholder="e.g. C:\Users\Username\Desktop or %USERPROFILE%\Desktop"
+                  placeholder="e.g. C:\Users\Username\Desktop"
                   className="flex-1 rounded-xl border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all font-mono"
                 />
                 <button
@@ -175,7 +177,7 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                 onClick={() => setFolderPath("%USERPROFILE%\\Desktop")}
                 className="hover:text-white underline font-mono"
               >
-                %USERPROFILE%\Desktop
+                Windows Desktop (personal + public)
               </button>
               <span>•</span>
               <button
@@ -246,6 +248,18 @@ export default function FolderScanModal({ categories, onImportShortcuts, onClose
                           <Square className="h-4 w-4 text-neutral-600" />
                         )}
                       </button>
+
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
+                        {item.iconUrl ? (
+                          <img
+                            src={item.iconUrl}
+                            alt=""
+                            className="h-full w-full object-contain p-1"
+                          />
+                        ) : (
+                          <Folder className="h-4 w-4 text-neutral-500" />
+                        )}
+                      </div>
 
                       <div className="space-y-1 flex-1 min-w-0">
                         <input

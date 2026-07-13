@@ -311,37 +311,109 @@ Return only JSON matching the supplied schema.`;
     }
 
     const script = `
-      $folder = [Environment]::ExpandEnvironmentVariables($env:APP_LAUNCHER_FOLDER)
-      if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+      Add-Type -AssemblyName System.Drawing
+
+      function Get-LauncherIconDataUrl([string] $source) {
+        try {
+          if ([string]::IsNullOrWhiteSpace($source)) { return $null }
+          $expandedSource = [Environment]::ExpandEnvironmentVariables($source.Trim().Trim('"'))
+          if ($expandedSource -match '^(.*),\\s*-?\\d+$') {
+            $expandedSource = $Matches[1].Trim().Trim('"')
+          }
+          if (-not [System.IO.File]::Exists($expandedSource)) { return $null }
+
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($expandedSource)
+          if ($null -eq $icon) { return $null }
+          try {
+            $bitmap = $icon.ToBitmap()
+            try {
+              $stream = New-Object System.IO.MemoryStream
+              try {
+                $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+                return "data:image/png;base64,$([Convert]::ToBase64String($stream.ToArray()))"
+              } finally {
+                $stream.Dispose()
+              }
+            } finally {
+              $bitmap.Dispose()
+            }
+          } finally {
+            $icon.Dispose()
+          }
+        } catch {
+          return $null
+        }
+      }
+
+      $requestedFolder = $env:APP_LAUNCHER_FOLDER
+      if ($requestedFolder -eq "__WINDOWS_DESKTOP__" -or
+          $requestedFolder -ieq "%USERPROFILE%\\Desktop") {
+        $folders = @(
+          [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
+          [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonDesktopDirectory)
+        )
+      } else {
+        $folders = @([Environment]::ExpandEnvironmentVariables($requestedFolder))
+      }
+
+      $folders = @($folders |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique)
+      if ($folders.Count -eq 0 -or
+          @($folders | Where-Object { Test-Path -LiteralPath $_ -PathType Container }).Count -eq 0) {
         throw "Folder does not exist."
       }
+
       $shell = New-Object -ComObject WScript.Shell
+      $files = @($folders |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        ForEach-Object { Get-ChildItem -LiteralPath $_ -File -Recurse -ErrorAction SilentlyContinue } |
+        Where-Object { $_.Extension.ToLowerInvariant() -in ".lnk", ".exe", ".url", ".appref-ms" } |
+        Sort-Object -Property FullName -Unique |
+        Select-Object -First 500)
+
       $results = @()
-      Get-ChildItem -LiteralPath $folder -File -ErrorAction Stop |
-        Where-Object { $_.Extension -in ".lnk", ".exe" } |
-        Select-Object -First 500 |
-        ForEach-Object {
-          if ($_.Extension -eq ".lnk") {
-            try {
-              $shortcut = $shell.CreateShortcut($_.FullName)
-              $results += [PSCustomObject]@{
-                name = $_.BaseName
-                execPath = $_.FullName
-                description = $shortcut.Description
-                category = "Others"
-                tags = @($_.BaseName.ToLower())
-              }
-            } catch {}
-          } else {
-            $results += [PSCustomObject]@{
-              name = $_.BaseName
-              execPath = $_.FullName
-              description = "Direct executable launcher."
-              category = "Others"
-              tags = @($_.BaseName.ToLower())
+      foreach ($file in $files) {
+        try {
+          $description = "Imported Windows launcher."
+          $iconSource = $file.FullName
+
+          if ($file.Extension -ieq ".lnk") {
+            $shortcut = $shell.CreateShortcut($file.FullName)
+            if (-not [string]::IsNullOrWhiteSpace($shortcut.Description)) {
+              $description = $shortcut.Description
             }
+            if (-not [string]::IsNullOrWhiteSpace($shortcut.IconLocation)) {
+              $iconSource = $shortcut.IconLocation
+            } elseif (-not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+              $iconSource = $shortcut.TargetPath
+            }
+          } elseif ($file.Extension -ieq ".url") {
+            $urlLines = @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)
+            $urlValue = ($urlLines | Where-Object { $_ -like "URL=*" } | Select-Object -First 1) -replace '^URL=', ''
+            $iconValue = ($urlLines | Where-Object { $_ -like "IconFile=*" } | Select-Object -First 1) -replace '^IconFile=', ''
+            if (-not [string]::IsNullOrWhiteSpace($urlValue)) {
+              $description = $urlValue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($iconValue)) {
+              $iconSource = $iconValue
+            }
+          } elseif ($file.Extension -ieq ".exe") {
+            $description = "Direct executable launcher."
+          } else {
+            $description = "ClickOnce application launcher."
           }
-        }
+
+          $results += [PSCustomObject]@{
+            name = $file.BaseName
+            execPath = $file.FullName
+            description = $description
+            category = "Others"
+            tags = @($file.BaseName.ToLowerInvariant())
+            iconUrl = Get-LauncherIconDataUrl $iconSource
+          }
+        } catch {}
+      }
       ConvertTo-Json -InputObject @($results) -Compress -Depth 3
     `;
 
@@ -350,7 +422,7 @@ Return only JSON matching the supplied schema.`;
         script,
         { APP_LAUNCHER_FOLDER: folderPath },
         30_000,
-        8 * 1024 * 1024,
+        32 * 1024 * 1024,
       );
       const parsed = JSON.parse(stdout.trim() || "[]");
       return res.json({
@@ -364,6 +436,13 @@ Return only JSON matching the supplied schema.`;
         error: "The folder could not be scanned. Check that it exists and is accessible.",
       });
     }
+  });
+
+  // Blank same-origin document used by Electron to recover localStorage from
+  // older application profiles without rendering or executing the main UI.
+  app.get("/migration-storage", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send("<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>");
   });
 
   if (!isProd) {
