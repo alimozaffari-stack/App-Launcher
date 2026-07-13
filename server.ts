@@ -310,7 +310,10 @@ Respond strictly in JSON format matching this schema:
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    // In production, server.cjs is bundled inside the dist directory itself.
+    // Using __dirname ensures that static assets are resolved relative to the actual code location
+    // rather than the working directory (process.cwd()) which can change when launched via shortcuts.
+    const distPath = __dirname;
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

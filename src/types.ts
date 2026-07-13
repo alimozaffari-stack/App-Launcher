@@ -8,6 +8,8 @@ export interface Shortcut {
   description?: string; // Quick note or description
   createdAt: number;
   order?: number;     // Order for drag-and-drop manual sorting
+  isFavorite?: boolean; // Star/pinned status
+  lastLaunchedAt?: number; // Last launched timestamp for recents
 }
 
 export interface SuggestionResponse {

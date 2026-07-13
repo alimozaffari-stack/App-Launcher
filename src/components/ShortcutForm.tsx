@@ -9,6 +9,7 @@ interface ShortcutFormProps {
   onDeleteCategory?: (category: string) => void;
   onSave: (shortcut: Omit<Shortcut, "id" | "createdAt"> & { id?: string }) => Promise<void>;
   onClose: () => void;
+  isEdit?: boolean;
 }
 
 export default function ShortcutForm({
@@ -18,6 +19,7 @@ export default function ShortcutForm({
   onDeleteCategory,
   onSave,
   onClose,
+  isEdit = false,
 }: ShortcutFormProps) {
   const [name, setName] = useState("");
   const [execPath, setExecPath] = useState("");
@@ -201,7 +203,7 @@ export default function ShortcutForm({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
           <h2 className="text-sm font-bold text-white">
-            {initialShortcut ? "Edit Program Shortcut" : "Add Program Shortcut"}
+            {isEdit ? "Edit Program Shortcut" : "Add Program Shortcut"}
           </h2>
           <button
             onClick={onClose}
@@ -246,17 +248,17 @@ export default function ShortcutForm({
 
           {/* Executable Path or URI */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Executable Path / Protocol URI</label>
+            <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Target Path (Executable / Folder / URI)</label>
             <input
               type="text"
               required
               value={execPath}
               onChange={(e) => setExecPath(e.target.value)}
-              placeholder="e.g. C:\Program Files\Game.exe, steam://run/1091500, discord://"
+              placeholder="e.g. C:\Users\YourName\Projects\MyProject, C:\Program Files\Game.exe, steam://run/1091500"
               className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all"
             />
             <p className="text-[10px] text-neutral-500 leading-normal">
-              Enter the full Windows path, standard URL, or custom game protocol launcher URI.
+              Enter the full Windows path (to a folder directory or executable file), website URL, or custom launcher protocol.
             </p>
           </div>
 
@@ -440,7 +442,7 @@ export default function ShortcutForm({
               className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-neutral-950 hover:bg-amber-400 active:scale-95 disabled:opacity-50 transition-colors"
             >
               {loading && <Loader2 className="h-3 w-3 animate-spin" />}
-              {initialShortcut ? "Update Shortcut" : "Add to Storefront"}
+              Save
             </button>
           </div>
         </form>

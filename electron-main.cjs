@@ -1,24 +1,21 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
 
-let serverProcess = null;
 let mainWindow = null;
 
 function startExpressServer() {
-  console.log("Starting backend Express server...");
-  const serverPath = path.join(__dirname, "dist", "server.cjs");
-  
-  // Set NODE_ENV to production so it serves static files from dist/
-  serverProcess = spawn("node", [serverPath], {
-    env: { ...process.env, NODE_ENV: "production", PORT: "3000" },
-    stdio: "inherit",
-    shell: true
-  });
+  console.log("Starting backend Express server inside Electron process...");
+  // Set NODE_ENV to production so it serves static files from the dist directory
+  process.env.NODE_ENV = "production";
+  process.env.PORT = "3000";
 
-  serverProcess.on("error", (err) => {
-    console.error("Failed to start backend server:", err);
-  });
+  try {
+    const serverPath = path.join(__dirname, "dist", "server.cjs");
+    require(serverPath);
+    console.log("Backend Express server successfully loaded inside Electron!");
+  } catch (err) {
+    console.error("Failed to require backend server:", err);
+  }
 }
 
 function createWindow() {
@@ -40,7 +37,21 @@ function createWindow() {
   // Hide the default menu bar for a modern utility look
   mainWindow.setMenuBarVisibility(false);
 
-  // Wait a short duration for the express server to spin up, then load
+  // Add developer-friendly troubleshooting shortcuts
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    // F12 or Ctrl+Shift+I toggles DevTools
+    if (input.key === "F12" || ((input.control || input.meta) && input.shift && input.key.toLowerCase() === "i")) {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+    // F5 reloads the window
+    if (input.key === "F5" || ((input.control || input.meta) && input.key.toLowerCase() === "r")) {
+      mainWindow.reload();
+      event.preventDefault();
+    }
+  });
+
+  // Wait a brief moment for the express server to start up, then load the local URL
   setTimeout(() => {
     mainWindow.loadURL("http://localhost:3000")
       .then(() => {
@@ -52,7 +63,7 @@ function createWindow() {
           mainWindow.loadURL("http://localhost:3000").then(() => mainWindow.show());
         }, 1000);
       });
-  }, 1200);
+  }, 400);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -77,16 +88,10 @@ if (!gotTheLock) {
   });
 }
 
-// Clean up child process on exit
+// Clean up on exit
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
-app.on("will-quit", () => {
-  if (serverProcess) {
-    console.log("Stopping backend Express server...");
-    serverProcess.kill();
-  }
-});
