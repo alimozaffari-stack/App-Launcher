@@ -375,7 +375,9 @@ export default function App() {
             tags: data.tags,
             description: data.description,
             iconUrl: data.iconUrl || undefined,
-            workspaceTags: data.workspaceTags ?? s.workspaceTags,
+            workspaceTags: (data.workspaceTags ?? s.workspaceTags ?? []).filter(
+              (group) => group !== data.category,
+            ),
           };
         }
         return s;
@@ -390,7 +392,9 @@ export default function App() {
         tags: data.tags,
         description: data.description,
         iconUrl: data.iconUrl || undefined,
-        workspaceTags: data.workspaceTags,
+        workspaceTags: (data.workspaceTags || []).filter(
+          (group) => group !== data.category,
+        ),
         createdAt: Date.now(),
         order: -1,
       };
@@ -465,7 +469,6 @@ export default function App() {
       category: folder.workspace,
       tags: ["Folder", "Workspace"],
       description: `Workspace folder: ${folder.path}`,
-      workspaceTags: [folder.workspace],
     });
     handleRemoveTemporaryFolder(folder.id);
   };
@@ -540,17 +543,20 @@ export default function App() {
 
   // Delete dynamic category
   const handleDeleteCategory = async (categoryObj: CategoryDoc) => {
-    // Check if category is currently used by any shortcut
-    const isUsed = shortcuts.some((s) => s.category === categoryObj.name);
+    const hasPrimaryMembers = shortcuts.some((s) => s.category === categoryObj.name);
+    const hasAdditionalMembers = shortcuts.some((s) =>
+      (s.workspaceTags || []).includes(categoryObj.name),
+    );
+    const isUsed = hasPrimaryMembers || hasAdditionalMembers;
     let confirmMsg = `Are you sure you want to delete the "${categoryObj.name}" category?`;
     if (isUsed) {
-      confirmMsg = `The category "${categoryObj.name}" contains active shortcuts. Deleting this category will reassign these shortcuts to the "Others" category. Do you want to proceed?`;
+      confirmMsg = `The group "${categoryObj.name}" contains shortcut memberships. Primary members will be reassigned and additional memberships will be removed. Do you want to proceed?`;
     }
 
     if (confirm(confirmMsg)) {
       // Ensure "Others" category exists if we are going to reassign shortcuts
       let finalCategories = [...categories];
-      if (isUsed && categoryObj.name !== "Others") {
+      if (hasPrimaryMembers && categoryObj.name !== "Others") {
         const hasOthers = categories.some((c) => c.name.toLowerCase() === "others");
         if (!hasOthers) {
           const newOthers: CategoryDoc = {
@@ -564,11 +570,19 @@ export default function App() {
       // Reassign shortcuts if needed
       let updatedShortcuts = [...shortcuts];
       if (isUsed) {
+        const fallbackCategory =
+          categoryObj.name === "Others"
+            ? finalCategories.find((category) => category.id !== categoryObj.id)?.name || "Office"
+            : "Others";
         updatedShortcuts = shortcuts.map((s) => {
-          if (s.category === categoryObj.name) {
-            return { ...s, category: "Others" };
-          }
-          return s;
+          const remainingGroups = (s.workspaceTags || []).filter(
+            (group) => group !== categoryObj.name && group !== fallbackCategory,
+          );
+          return {
+            ...s,
+            category: s.category === categoryObj.name ? fallbackCategory : s.category,
+            workspaceTags: remainingGroups.length > 0 ? remainingGroups : undefined,
+          };
         });
         setShortcuts(updatedShortcuts);
         localStorage.setItem("launcher_shortcuts", JSON.stringify(updatedShortcuts));
@@ -579,6 +593,14 @@ export default function App() {
       localStorage.setItem("launcher_categories", JSON.stringify(updatedCats));
       if (selectedCategory === categoryObj.name) {
         setSelectedCategory("All");
+      }
+      setTemporaryFolders((current) =>
+        current.filter((folder) => folder.workspace !== categoryObj.name),
+      );
+      if (nominatedCategory === categoryObj.name) {
+        const fallbackNomination = updatedCats[0]?.name || "Others";
+        setNominatedCategory(fallbackNomination);
+        localStorage.setItem("launcher_nominated_category", fallbackNomination);
       }
     }
   };
@@ -729,7 +751,7 @@ export default function App() {
           tag.toLowerCase().includes(normalizedQuery),
         );
       const matchesCategory =
-        selectedCategory === "All" || shortcut.category === selectedCategory;
+        selectedCategory === "All" || isShortcutInWorkspace(shortcut, selectedCategory);
       return matchesSearch && matchesCategory;
     });
   }, [displayShortcuts, searchQuery, selectedCategory]);

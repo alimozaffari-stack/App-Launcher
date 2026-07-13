@@ -301,7 +301,7 @@ export default function ShortcutCard({
                 </span>
                 {(shortcut.workspaceTags || []).length > 0 && (
                   <span className="shrink-0 px-1 py-0.2 rounded bg-amber-500/10 text-[8px] font-mono uppercase text-amber-400 tracking-wider">
-                    Nominated
+                    {1 + (shortcut.workspaceTags || []).length} groups
                   </span>
                 )}
               </div>
@@ -622,11 +622,11 @@ export default function ShortcutCard({
           {/* Tags */}
           {((shortcut.workspaceTags || []).length > 0 || (shortcut.tags && shortcut.tags.length > 0)) && (
             <div className="flex flex-wrap gap-1">
-              {(shortcut.workspaceTags || []).slice(0, 1).map((workspace) => (
+              {(shortcut.workspaceTags || []).slice(0, 2).map((workspace) => (
                 <span
                   key={`workspace-${workspace}`}
                   className="inline-flex items-center gap-0.5 rounded border border-amber-500/15 bg-amber-500/10 px-1 py-0.2 text-[8px] font-medium text-amber-400"
-                  title={`Nominated workspace: ${workspace}`}
+                  title={`Additional group: ${workspace}`}
                 >
                   <BookmarkPlus className="h-2 w-2" />
                   {workspace}

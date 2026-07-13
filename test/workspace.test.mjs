@@ -8,6 +8,7 @@ import {
   isShortcutInWorkspace,
   readTemporaryFolders,
   removeShortcutFromWorkspace,
+  suggestShortcutTags,
 } from "../src/workspace.js";
 
 const shortcuts = [
@@ -50,4 +51,30 @@ test("validates temporary folder session data", () => {
   };
   assert.deepEqual(readTemporaryFolders(JSON.stringify([valid, { id: 3 }])), [valid]);
   assert.deepEqual(readTemporaryFolders("not-json"), []);
+});
+
+test("suggests no more than three deterministic local tags", () => {
+  assert.deepEqual(
+    suggestShortcutTags({
+      name: "Visual Studio Code",
+      execPath: "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+      category: "Development",
+    }),
+    ["development", "visual", "studio"],
+  );
+  assert.deepEqual(
+    suggestShortcutTags({
+      name: "Research Portal",
+      execPath: "https://example.com/research",
+      category: "Research",
+    }),
+    ["website", "research", "portal"],
+  );
+  assert.deepEqual(
+    suggestShortcutTags(
+      { name: "Blender Design", execPath: "C:\\Apps\\Blender.exe", category: "Creative" },
+      2,
+    ),
+    ["creative", "design"],
+  );
 });

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Shortcut } from "../types";
 import { X, Sparkles, Loader2, Image as ImageIcon, Plus, Check } from "lucide-react";
+import { suggestShortcutTags } from "../workspace.js";
 
 interface ShortcutFormProps {
   initialShortcut?: Shortcut | null;
@@ -24,6 +25,7 @@ export default function ShortcutForm({
   const [name, setName] = useState("");
   const [execPath, setExecPath] = useState("");
   const [category, setCategory] = useState("Office");
+  const [workspaceTags, setWorkspaceTags] = useState<string[]>([]);
   const [tagsInput, setTagsInput] = useState("");
   const [description, setDescription] = useState("");
   const [iconUrl, setIconUrl] = useState("");
@@ -45,6 +47,7 @@ export default function ShortcutForm({
       setName(initialShortcut.name);
       setExecPath(initialShortcut.execPath);
       setCategory(initialShortcut.category);
+      setWorkspaceTags(initialShortcut.workspaceTags || []);
       setTagsInput(initialShortcut.tags.join(", "));
       setDescription(initialShortcut.description || "");
       setIconUrl(initialShortcut.iconUrl || "");
@@ -157,6 +160,7 @@ export default function ShortcutForm({
           matchedCat = await onAddCategory(data.category);
         }
         setCategory(matchedCat);
+        setWorkspaceTags((current) => current.filter((group) => group !== matchedCat));
       }
       if (data.tags && Array.isArray(data.tags)) {
         setTagsInput(data.tags.join(", "));
@@ -185,6 +189,7 @@ export default function ShortcutForm({
     try {
       const addedName = await onAddCategory(trimmed);
       setCategory(addedName);
+      setWorkspaceTags((current) => current.filter((group) => group !== addedName));
       setNewCatName("");
       setShowNewCatInput(false);
     } catch (err) {
@@ -192,6 +197,23 @@ export default function ShortcutForm({
     } finally {
       setAddingCat(false);
     }
+  };
+
+  const handleLocalTagSuggestion = () => {
+    const currentTags = tagsInput
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    const suggestedTags = suggestShortcutTags({ name, execPath, category }, 3);
+    setTagsInput(Array.from(new Set([...currentTags, ...suggestedTags])).join(", "));
+  };
+
+  const handleAdditionalGroupToggle = (group: string) => {
+    setWorkspaceTags((current) =>
+      current.includes(group)
+        ? current.filter((item) => item !== group)
+        : [...current, group],
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -208,6 +230,9 @@ export default function ShortcutForm({
       .split(",")
       .map((t) => t.trim().toLowerCase())
       .filter((t) => t.length > 0);
+    const additionalGroups = workspaceTags.filter(
+      (group) => group !== category && categories.includes(group),
+    );
 
     try {
       await onSave({
@@ -215,6 +240,7 @@ export default function ShortcutForm({
         name: name.trim(),
         execPath: execPath.trim(),
         category,
+        workspaceTags: additionalGroups.length > 0 ? additionalGroups : undefined,
         tags: parsedTags,
         description: description.trim(),
         iconUrl: iconUrl || undefined,
@@ -302,7 +328,7 @@ export default function ShortcutForm({
           {/* Group Category */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Group Category</label>
+              <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Primary Group</label>
               <button
                 type="button"
                 onClick={() => setShowNewCatInput(!showNewCatInput)}
@@ -345,7 +371,10 @@ export default function ShortcutForm({
                 <div key={cat} className="relative group/cat shrink-0">
                   <button
                     type="button"
-                    onClick={() => setCategory(cat)}
+                    onClick={() => {
+                      setCategory(cat);
+                      setWorkspaceTags((current) => current.filter((group) => group !== cat));
+                    }}
                     className={`w-full rounded-xl py-2 px-1 text-[10px] font-semibold border transition-all ${
                       category === cat
                         ? "border-amber-500 bg-amber-500/15 text-amber-400 font-bold"
@@ -367,6 +396,7 @@ export default function ShortcutForm({
                             setCategory(remaining[0]);
                           }
                         }
+                        setWorkspaceTags((current) => current.filter((group) => group !== cat));
                       }}
                       className="absolute -top-1 -right-1 opacity-0 group-hover/cat:opacity-100 focus:opacity-100 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600/95 text-white hover:bg-red-500 shadow transition-opacity duration-150"
                       title={`Delete ${cat} category`}
@@ -377,11 +407,60 @@ export default function ShortcutForm({
                 </div>
               ))}
             </div>
+
+            {categories.length > 1 && (
+              <fieldset className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3">
+                <legend className="px-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+                  Also appears in
+                </legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {categories
+                    .filter((group) => group !== category)
+                    .map((group) => {
+                      const checked = workspaceTags.includes(group);
+                      return (
+                        <label
+                          key={`additional-${group}`}
+                          className={`inline-flex cursor-pointer items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition-colors ${
+                            checked
+                              ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                              : "border-neutral-800 bg-neutral-950 text-neutral-500 hover:text-neutral-300"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={checked}
+                            onChange={() => handleAdditionalGroupToggle(group)}
+                          />
+                          {checked && <Check className="h-2.5 w-2.5" />}
+                          {group}
+                        </label>
+                      );
+                    })}
+                </div>
+                <p className="mt-2 text-[9px] leading-normal text-neutral-500">
+                  Additional membership does not change the primary group.
+                </p>
+              </fieldset>
+            )}
           </div>
 
           {/* Tags */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Tags / Keywords (comma separated)</label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wider">Tags / Keywords</label>
+              <button
+                type="button"
+                onClick={handleLocalTagSuggestion}
+                disabled={!name.trim() && !execPath.trim()}
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 hover:text-amber-300 disabled:opacity-40"
+                title="Suggest up to three local tags from the name, target and primary group"
+              >
+                <Sparkles className="h-3 w-3" />
+                Suggest up to 3
+              </button>
+            </div>
             <input
               type="text"
               value={tagsInput}
@@ -389,6 +468,9 @@ export default function ShortcutForm({
               placeholder="e.g. sci-fi, design, edit, social"
               className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3.5 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all"
             />
+            <p className="text-[9px] leading-normal text-neutral-500">
+              Suggestions are generated locally and added only when you choose the button. Review them before saving.
+            </p>
           </div>
 
           {/* Description */}
