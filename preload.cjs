@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("launcher", {
+  isDirectDesktop: true,
   loadState: () => ipcRenderer.invoke("library:load"),
   saveState: (state) => ipcRenderer.invoke("library:save", state),
   openItem: (item) => ipcRenderer.invoke("library:open", item),
