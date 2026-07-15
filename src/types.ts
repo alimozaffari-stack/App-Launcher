@@ -22,7 +22,16 @@ export interface LibraryItem {
   isFavourite: boolean;
   lastLaunchedAt?: number;
 }
-export interface Workspace { id: string; name: string; itemIds: string[]; }
+export interface WorkspaceResource {
+  id: string;
+  name: string;
+  target: string;
+  kind: ItemKind;
+  arguments: string[];
+  workingDirectory?: string;
+  description?: string;
+}
+export interface Workspace { id: string; name: string; itemIds: string[]; resources: WorkspaceResource[]; }
 export interface PanelPreference { visible: boolean; collapsed: boolean; }
 export interface LibraryState {
   version: 2;
