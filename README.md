@@ -1,4 +1,4 @@
-# App Launcher — Direct Desktop Build (v1.1.1)
+# App Launcher — Direct Desktop Build (v1.1.2)
 
 An offline-first Electron library for applications, folders, files, URLs and named workspaces.
 
@@ -21,7 +21,7 @@ The installer is written to `dist-desktop/`.
 
 ## Upgrade procedure
 
-1. If upgrading from the earlier launcher, first install and open the v1.1.0 migration build once.
+1. If upgrading from the earlier launcher, first install and open the v1.1.1 migration build once.
 2. Confirm that your existing library appears, then close it.
 3. Install this v1.1.1 direct desktop build.
 
