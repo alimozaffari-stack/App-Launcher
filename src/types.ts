@@ -33,6 +33,7 @@ export interface LibraryState {
     focusGroupId: string | "all" | "none";
     workspaceId?: string;
     panels: Record<PanelId, PanelPreference>;
+    panelOrder: PanelId[];
     sortMode: SortMode;
     layout: LibraryLayout;
   };
