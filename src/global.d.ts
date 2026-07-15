@@ -3,6 +3,7 @@ import type { ItemKind, ImportedResource, LibraryItem, LibraryState } from "./ty
 declare global {
   interface Window {
     launcher?: {
+      isDirectDesktop?: boolean;
       loadState(): Promise<LibraryState | null>;
       saveState(state: LibraryState): Promise<boolean>;
       openItem(item: LibraryItem): Promise<{ ok: boolean; error?: string }>;
