@@ -1,6 +1,8 @@
-# App Launcher
+# App Launcher — Migration Build (v1.1.0)
 
 An offline-first Electron library for applications, folders, files, URLs and named workspaces.
+
+This is the required one-time **migration build** for users upgrading from the earlier launcher. It retains the former `http://localhost:3000` origin only long enough to move existing browser-stored shortcuts into the desktop library file. Open it once before installing the final direct-file desktop build.
 
 ## Run and package
 
@@ -16,6 +18,13 @@ npm run desktop:build
 ```
 
 The installer is written to `dist-desktop/`.
+
+## Migration procedure
+
+1. Build and install this version over the earlier App Launcher.
+2. Open it once and confirm that the existing library appears.
+3. Close the application. Your data is now stored in the desktop user-data location.
+4. Install the subsequent direct desktop release.
 
 ## What this release changes
 
