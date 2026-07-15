@@ -16,6 +16,7 @@ export interface LibraryItem {
   groupIds: string[];
   tags: string[];
   iconKey?: string;
+  iconDataUrl?: string;
   createdAt: number;
   order: number;
   isFavourite: boolean;
