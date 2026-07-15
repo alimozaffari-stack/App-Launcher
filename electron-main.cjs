@@ -119,7 +119,7 @@ function createWindow() {
   });
   mainWindow.setMenuBarVisibility(false);
   mainWindow.once("ready-to-show", () => mainWindow.show());
-  mainWindow.loadURL("http://localhost:3000");
+  mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 function registerIpc() {
@@ -139,10 +139,8 @@ function registerIpc() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.whenReady().then(async () => {
+  app.whenReady().then(() => {
     registerIpc();
-    const { startLocalServer } = require(path.join(__dirname, "dist", "server.cjs"));
-    await startLocalServer();
     createWindow();
     app.on("activate", () => { if (!mainWindow) createWindow(); });
   });
