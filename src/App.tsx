@@ -1,13 +1,14 @@
 import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AppWindow, ArchiveRestore, Check, ChevronDown, ChevronRight, CircleAlert, File, FilePlus2,
-  Folder, FolderOpen, LayoutList, Layers3, ListFilter, Plus, Search, Settings2,
+  Folder, FolderOpen, GripVertical, LayoutList, Layers3, ListFilter, Plus, Search, Settings2,
   Star, Tag, Trash2, X, Zap
 } from "lucide-react";
 import type { Group, ImportedResource, ItemKind, LibraryItem, LibraryLayout, LibraryState, PanelId, SortMode, Workspace } from "./types";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const panelTitles: Record<PanelId, string> = { focus: "Focus group", favourites: "Favourites", recent: "Recent", workspaces: "Workspaces" };
+const panelIds: PanelId[] = ["focus", "favourites", "recent", "workspaces"];
 const defaultPanelPreferences = {
   focus: { visible: true, collapsed: false }, favourites: { visible: true, collapsed: false },
   recent: { visible: true, collapsed: false }, workspaces: { visible: true, collapsed: false }
@@ -25,7 +26,7 @@ const kindFromPath = (target: string): ItemKind => {
 function makeGroup(name: string): Group { return { id: groupId(name), name: name.trim() }; }
 function blankState(): LibraryState {
   const groups = ["Applications", "Current Work", "Knowledge Management", "Office", "Others", "Research", "Utility"].map(makeGroup);
-  return { version: 2, groups, items: [], workspaces: [], preferences: { focusGroupId: "none", panels: defaultPanelPreferences, sortMode: "manual", layout: "flat" } };
+  return { version: 2, groups, items: [], workspaces: [], preferences: { focusGroupId: "none", panels: defaultPanelPreferences, panelOrder: panelIds, sortMode: "manual", layout: "flat" } };
 }
 function normaliseState(value: LibraryState): LibraryState {
   return {
@@ -36,6 +37,7 @@ function normaliseState(value: LibraryState): LibraryState {
     preferences: {
       focusGroupId: value.preferences?.focusGroupId || "none",
       workspaceId: value.preferences?.workspaceId,
+      panelOrder: [...new Set([...(value.preferences?.panelOrder || []), ...panelIds])] as PanelId[],
       sortMode: value.preferences?.sortMode || "manual",
       layout: value.preferences?.layout || "flat",
       panels: { ...defaultPanelPreferences, ...(value.preferences?.panels || {}) }
@@ -87,6 +89,7 @@ export default function App() {
   const [scanOpen, setScanOpen] = useState(false);
   const [managePanels, setManagePanels] = useState(false);
   const [migrationWarning, setMigrationWarning] = useState(false);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -192,6 +195,16 @@ export default function App() {
   function changePanel(panelId: PanelId, patch: Partial<{ visible: boolean; collapsed: boolean }>) {
     change((current) => ({ ...current, preferences: { ...current.preferences, panels: { ...current.preferences.panels, [panelId]: { ...current.preferences.panels[panelId], ...patch } } } }));
   }
+  function reorderPanels(sourceId: string, targetId: string) {
+    if (!state || sourceId === targetId || !panelIds.includes(sourceId as PanelId) || !panelIds.includes(targetId as PanelId)) return;
+    change((current) => {
+      const order = [...current.preferences.panelOrder];
+      const sourceIndex = order.indexOf(sourceId as PanelId); const targetIndex = order.indexOf(targetId as PanelId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const [moved] = order.splice(sourceIndex, 1); order.splice(targetIndex, 0, moved);
+      return { ...current, preferences: { ...current.preferences, panelOrder: order } };
+    });
+  }
   function setPreference<K extends keyof LibraryState["preferences"]>(key: K, value: LibraryState["preferences"][K]) { change((current) => ({ ...current, preferences: { ...current.preferences, [key]: value } })); }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -206,7 +219,7 @@ export default function App() {
 
   if (!state) return <div className="min-h-screen grid place-items-center text-sm text-neutral-500">Opening your library…</div>;
   const selectedSet = selectedIds;
-  const visiblePanels = (Object.keys(panelTitles) as PanelId[]).filter((panelId) => state.preferences.panels[panelId].visible);
+  const visiblePanels = state.preferences.panelOrder.filter((panelId) => state.preferences.panels[panelId].visible);
   const favourites = state.items.filter((item) => item.isFavourite);
   const recent = [...state.items].filter((item) => item.lastLaunchedAt).sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0)).slice(0, 8);
   const focusItems = state.preferences.focusGroupId === "all" ? state.items : state.preferences.focusGroupId === "none" ? [] : state.items.filter((item) => item.groupIds.includes(state.preferences.focusGroupId));
@@ -227,13 +240,10 @@ export default function App() {
       </header>
       {migrationWarning && <section className="mb-5 flex items-start gap-3 rounded-xl border border-amber-400/40 bg-amber-400/5 p-4 text-sm text-neutral-300"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" /><div><strong className="text-amber-300">No desktop library was found.</strong><p className="mt-1 text-xs leading-relaxed text-neutral-400">If this is an upgrade from the earlier localhost launcher, install and open the v1.1.0 migration build once before using this direct desktop version. New installations can ignore this notice.</p></div><button className="ml-auto text-xs text-neutral-400 hover:text-white" onClick={() => setMigrationWarning(false)}>Dismiss</button></section>}
 
-      {managePanels && <section className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4"><div className="mb-3 flex items-center justify-between"><strong className="text-sm">Dashboard panels</strong><button className="text-xs text-neutral-400 hover:text-white" onClick={() => setManagePanels(false)}>Done</button></div><div className="flex flex-wrap gap-3">{(Object.keys(panelTitles) as PanelId[]).map((panelId) => <label key={panelId} className="flex items-center gap-2 rounded-lg border border-neutral-800 px-3 py-2 text-xs"><input type="checkbox" checked={state.preferences.panels[panelId].visible} onChange={(event) => changePanel(panelId, { visible: event.target.checked })} />{panelTitles[panelId]}</label>)}</div></section>}
+      {managePanels && <section className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4"><div className="mb-3 flex items-center justify-between"><strong className="text-sm">Dashboard panels</strong><button className="text-xs text-neutral-400 hover:text-white" onClick={() => setManagePanels(false)}>Done</button></div><p className="mb-3 text-xs text-neutral-500">Drag a panel by its handle to choose its position.</p><div className="flex flex-wrap gap-3">{panelIds.map((panelId) => <label key={panelId} className="flex items-center gap-2 rounded-lg border border-neutral-800 px-3 py-2 text-xs"><input type="checkbox" checked={state.preferences.panels[panelId].visible} onChange={(event) => changePanel(panelId, { visible: event.target.checked })} />{panelTitles[panelId]}</label>)}</div></section>}
 
       {visiblePanels.length > 0 && <section className="mb-7 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
-        {state.preferences.panels.focus.visible && <Panel title="Focus group" panelId="focus" state={state} onChange={changePanel} actions={<select value={state.preferences.focusGroupId} onChange={(event) => setPreference("focusGroupId", event.target.value)} className="panel-select"><option value="none">None (hide)</option><option value="all">All items</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>}><PreviewList items={focusItems} onLaunch={launch} collapsed={state.preferences.panels.focus.collapsed} empty="Choose a group or show all items." /></Panel>}
-        {state.preferences.panels.favourites.visible && <Panel title="Favourites" panelId="favourites" state={state} onChange={changePanel}><PreviewList items={favourites} onLaunch={launch} collapsed={state.preferences.panels.favourites.collapsed} empty="Star items in the library to place them here." /></Panel>}
-        {state.preferences.panels.recent.visible && <Panel title="Recent" panelId="recent" state={state} onChange={changePanel}><PreviewList items={recent} onLaunch={launch} collapsed={state.preferences.panels.recent.collapsed} empty="Items you open will appear here." /></Panel>}
-        {state.preferences.panels.workspaces.visible && <Panel title="Workspaces" panelId="workspaces" state={state} onChange={changePanel} actions={<div className="flex items-center gap-1"><select value={activeWorkspace?.id || ""} onChange={(event) => setPreference("workspaceId", event.target.value)} className="panel-select"><option value="">No workspace</option>{state.workspaces.slice().sort((a,b) => collator.compare(a.name,b.name)).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select><button className="icon-button" title="Create workspace" onClick={addWorkspace}><Plus /></button></div>}><PreviewList items={workspaceItems} onLaunch={launch} collapsed={state.preferences.panels.workspaces.collapsed} empty="Create a workspace and add selected resources below." /></Panel>}
+        {visiblePanels.map((panelId) => panelId === "focus" ? <Panel key={panelId} title="Focus group" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels} actions={<select value={state.preferences.focusGroupId} onChange={(event) => setPreference("focusGroupId", event.target.value)} className="panel-select"><option value="none">None (hide)</option><option value="all">All items</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>}><PreviewList items={focusItems} onLaunch={launch} collapsed={state.preferences.panels.focus.collapsed} empty="Choose a group or show all items." /></Panel> : panelId === "favourites" ? <Panel key={panelId} title="Favourites" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels}><PreviewList items={favourites} onLaunch={launch} collapsed={state.preferences.panels.favourites.collapsed} empty="Star items in the library to place them here." /></Panel> : panelId === "recent" ? <Panel key={panelId} title="Recent" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels}><PreviewList items={recent} onLaunch={launch} collapsed={state.preferences.panels.recent.collapsed} empty="Items you open will appear here." /></Panel> : <Panel key={panelId} title="Workspaces" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels} actions={<div className="flex items-center gap-1"><select value={activeWorkspace?.id || ""} onChange={(event) => setPreference("workspaceId", event.target.value)} className="panel-select"><option value="">No workspace</option>{state.workspaces.slice().sort((a,b) => collator.compare(a.name,b.name)).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select><button className="icon-button" title="Create workspace" onClick={addWorkspace}><Plus /></button></div>}><PreviewList items={workspaceItems} onLaunch={launch} collapsed={state.preferences.panels.workspaces.collapsed} empty="Create a workspace and add selected resources below." /></Panel>)}
       </section>}
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/25 p-3 sm:p-4">
@@ -242,7 +252,7 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-2"><span className="label">Layout</span><Segmented value={state.preferences.layout} onChange={(value) => setPreference("layout", value as LibraryLayout)} options={[["flat", "Flat"], ["purpose", "By purpose"], ["alpha", "A–Z"]]} /><span className="label ml-2">Sort</span><Segmented value={state.preferences.sortMode} onChange={(value) => setPreference("sortMode", value as SortMode)} options={[["manual", "Drag order"], ["alpha", "A–Z"], ["date", "Date"]]} /></div>
         </div>
         <div className="mb-4 flex flex-wrap gap-1.5"><button className={`chip ${activeGroupId === "all" ? "active" : ""}`} onClick={() => setActiveGroupId("all")}>All</button>{groups.map((group) => <button key={group.id} className={`chip ${activeGroupId === group.id ? "active" : ""}`} onClick={() => setActiveGroupId(group.id)}>{group.name}</button>)}<button className="chip add" onClick={() => { const name = window.prompt("New group name:"); if (name) addGroup(name); }}>+ Add group</button></div>
-        {allTags.length > 0 && <div className="mb-4 flex flex-wrap gap-1.5 border-b border-neutral-800 pb-4"><span className="label mr-1">Tags</span>{allTags.map((tag) => <button key={tag} className="tag-chip" onClick={() => setQuery(tag)}>{tag}</button>)}</div>}
+        {allTags.length > 0 && <div className="mb-4 border-b border-neutral-800 pb-4"><button className="flex items-center gap-2 text-left" onClick={() => setTagsExpanded((value) => !value)}><span className="label">Tags</span><span className="text-xs text-neutral-500">{allTags.length}</span>{tagsExpanded ? <ChevronDown className="h-4 w-4 text-neutral-400" /> : <ChevronRight className="h-4 w-4 text-neutral-400" />}<span className="text-xs text-neutral-400">{tagsExpanded ? "Hide" : "Show"}</span></button>{tagsExpanded && <div className="mt-3 flex flex-wrap gap-1.5">{allTags.map((tag) => <button key={tag} className="tag-chip" onClick={() => setQuery(tag)}>{tag}</button>)}</div>}</div>}
 
         {selectedIds.size > 0 && <BulkBar selected={selectedIds.size} groups={groups} workspaces={state.workspaces} onClear={() => setSelectedIds(new Set())} onAddGroup={(identifier) => assignGroup(selectedIds, identifier)} onPrimary={(identifier) => assignGroup(selectedIds, identifier, true)} onFavourite={() => toggleFavourite(selectedIds, true)} onWorkspace={addSelectedToWorkspace} onDelete={() => deleteItems(selectedIds)} />}
         <div className="mb-3 flex items-center justify-between text-xs text-neutral-500"><span>{displayItems.length} item{displayItems.length === 1 ? "" : "s"}</span><div className="flex gap-3"><button className="hover:text-white" onClick={selectVisible}>Select all</button><button className="hover:text-white" onClick={() => setSelectedIds(new Set())}>Deselect</button></div></div>
@@ -256,9 +266,9 @@ export default function App() {
 }
 
 function Segmented({ value, onChange, options }: { value: string; onChange(value: string): void; options: Array<[string, string]> }) { return <div className="flex rounded-lg border border-neutral-700 bg-neutral-950 p-0.5">{options.map(([key, label]) => <button key={key} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${value === key ? "bg-amber-400 text-black" : "text-neutral-400 hover:text-white"}`} onClick={() => onChange(key)}>{label}</button>)}</div>; }
-function Panel({ title, panelId, state, onChange, actions, children }: { title: string; panelId: PanelId; state: LibraryState; onChange(panel: PanelId, patch: Partial<{ visible: boolean; collapsed: boolean }>): void; actions?: React.ReactNode; children: React.ReactNode }) {
+function Panel({ title, panelId, state, onChange, onReorder, actions, children }: { title: string; panelId: PanelId; state: LibraryState; onChange(panel: PanelId, patch: Partial<{ visible: boolean; collapsed: boolean }>): void; onReorder(source: string, target: string): void; actions?: React.ReactNode; children: React.ReactNode }) {
   const preference = state.preferences.panels[panelId];
-  return <section className="min-h-0 rounded-xl border border-neutral-800 bg-neutral-900/35 p-3"><div className="flex min-h-7 items-center justify-between gap-2 border-b border-neutral-800 pb-2"><strong className="text-xs uppercase tracking-wide text-neutral-200">{title}</strong><div className="flex items-center gap-1">{actions}<button className="icon-button" title={preference.collapsed ? "Expand" : "Collapse"} onClick={() => onChange(panelId, { collapsed: !preference.collapsed })}>{preference.collapsed ? <ChevronRight /> : <ChevronDown />}</button><button className="icon-button" title="Hide panel" onClick={() => onChange(panelId, { visible: false })}><X /></button></div></div>{children}</section>;
+  return <section draggable onDragStart={(event) => event.dataTransfer.setData("text/plain", panelId)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); onReorder(event.dataTransfer.getData("text/plain"), panelId); }} className="min-h-0 rounded-xl border border-neutral-800 bg-neutral-900/35 p-3"><div className="flex min-h-7 items-center justify-between gap-2 border-b border-neutral-800 pb-2"><strong className="text-xs uppercase tracking-wide text-neutral-200">{title}</strong><div className="flex items-center gap-1"><span className="icon-button cursor-grab text-neutral-500" title="Drag to reorder"><GripVertical /></span>{actions}<button className="icon-button" title={preference.collapsed ? "Expand" : "Collapse"} onClick={() => onChange(panelId, { collapsed: !preference.collapsed })}>{preference.collapsed ? <ChevronRight /> : <ChevronDown />}</button><button className="icon-button" title="Hide panel" onClick={() => onChange(panelId, { visible: false })}><X /></button></div></div>{children}</section>;
 }
 function PreviewList({ items, onLaunch, collapsed, empty }: { items: LibraryItem[]; onLaunch(item: LibraryItem): void; collapsed: boolean; empty: string }) {
   if (collapsed) return <p className="pt-3 text-xs text-neutral-500">{items.length} item{items.length === 1 ? "" : "s"}</p>;
@@ -266,7 +276,7 @@ function PreviewList({ items, onLaunch, collapsed, empty }: { items: LibraryItem
 }
 function PurposeLibrary(props: ItemGridProps & { groups: Group[] }) { return <div className="space-y-5">{props.groups.map((group) => { const groupItems = props.items.filter((item) => item.primaryGroupId === group.id); return groupItems.length ? <section key={group.id}><div className="mb-2 flex items-center gap-2"><Layers3 className="h-3.5 w-3.5 text-amber-400" /><h2 className="text-xs font-bold uppercase tracking-wide text-neutral-300">{group.name}</h2><span className="text-[10px] text-neutral-500">{groupItems.length}</span></div><ItemGrid {...props} items={groupItems} /></section> : null; })}</div>; }
 type ItemGridProps = { items: LibraryItem[]; selected: Set<string>; groupName(id: string): string; onSelect(id: string): void; onLaunch(item: LibraryItem): void; onEdit(item: LibraryItem): void; onToggleFavourite(item: LibraryItem): void; onDelete(item: LibraryItem): void; onReorder(source: string, target: string): void; manual: boolean; };
-function ItemGrid({ items, selected, groupName, onSelect, onLaunch, onEdit, onToggleFavourite, onDelete, onReorder, manual }: ItemGridProps) { return <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">{items.map((item) => <ItemCard key={item.id} item={item} selected={selected.has(item.id)} groupName={groupName} onSelect={onSelect} onLaunch={onLaunch} onEdit={onEdit} onToggleFavourite={onToggleFavourite} onDelete={onDelete} onReorder={onReorder} manual={manual} />)}{!items.length && <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center text-sm text-neutral-500">No items match this view.</div>}</div>; }
+function ItemGrid({ items, selected, groupName, onSelect, onLaunch, onEdit, onToggleFavourite, onDelete, onReorder, manual }: ItemGridProps) { return <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 2xl:grid-cols-3">{items.map((item) => <ItemCard key={item.id} item={item} selected={selected.has(item.id)} groupName={groupName} onSelect={onSelect} onLaunch={onLaunch} onEdit={onEdit} onToggleFavourite={onToggleFavourite} onDelete={onDelete} onReorder={onReorder} manual={manual} />)}{!items.length && <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center text-sm text-neutral-500">No items match this view.</div>}</div>; }
 function ItemCard({ item, selected, groupName, onSelect, onLaunch, onEdit, onToggleFavourite, onDelete, onReorder, manual }: { item: LibraryItem; selected: boolean; groupName(id: string): string; onSelect(id: string): void; onLaunch(item: LibraryItem): void; onEdit(item: LibraryItem): void; onToggleFavourite(item: LibraryItem): void; onDelete(item: LibraryItem): void; onReorder(source: string, target: string): void; manual: boolean; }) {
   return <article draggable={manual} onDragStart={(event) => event.dataTransfer.setData("text/plain", item.id)} onDragOver={(event) => manual && event.preventDefault()} onDrop={(event) => { event.preventDefault(); onReorder(event.dataTransfer.getData("text/plain"), item.id); }} className={`group grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-3 ${selected ? "border-amber-400/70 bg-amber-400/5" : "border-neutral-800 bg-neutral-950/35 hover:border-neutral-700"}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} className="accent-amber-400" /><button onClick={() => void onLaunch(item)} className="shrink-0"><ItemIcon item={item} /></button><button onClick={() => void onLaunch(item)} className="min-w-0 text-left"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-sm font-semibold text-white">{item.name}</h3><span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-neutral-400">{groupName(item.primaryGroupId)}</span>{item.groupIds.length > 1 && <span className="text-[10px] font-semibold uppercase text-amber-400">{item.groupIds.length} groups</span>}</div><p className="mt-0.5 truncate text-xs text-neutral-500">{item.description || item.target}</p></button><div className="flex shrink-0 gap-1 opacity-70 transition group-hover:opacity-100"><button className="icon-button" title={item.isFavourite ? "Remove favourite" : "Add favourite"} onClick={() => onToggleFavourite(item)}><Star className={item.isFavourite ? "fill-amber-400 text-amber-400" : ""} /></button><button className="icon-button" title="Edit" onClick={() => onEdit(item)}><Settings2 /></button><button className="icon-button danger" title="Remove" onClick={() => onDelete(item)}><Trash2 /></button></div></article>;
 }
