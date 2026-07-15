@@ -133,7 +133,12 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(mainWindow, { title: kind === "folder" ? "Choose folder" : "Choose file or application", properties });
     if (result.canceled || result.filePaths.length === 0) return null;
     const target = result.filePaths[0];
-    return { target, kind: kind === "folder" ? "folder" : inferKind(target), name: path.basename(target, path.extname(target)) };
+    if (kind === "folder") return { target, kind: "folder", name: path.basename(target) };
+    if (/\.lnk$/i.test(target)) {
+      const shortcut = await resolveWindowsShortcut(target);
+      if (shortcut?.target) return { target: shortcut.target, kind: inferKind(shortcut.target), name: path.basename(target, path.extname(target)), arguments: shortcut.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut.workingDirectory || undefined, description: shortcut.description || undefined };
+    }
+    return { target, kind: "file", name: path.basename(target, path.extname(target)) };
   });
 }
 
