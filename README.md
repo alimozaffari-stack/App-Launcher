@@ -1,4 +1,4 @@
-# App Launcher — Migration Build (v1.1.0)
+# App Launcher — Migration Build (v1.1.1)
 
 An offline-first Electron library for applications, folders, files, URLs and named workspaces.
 
