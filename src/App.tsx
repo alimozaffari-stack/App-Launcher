@@ -85,13 +85,16 @@ export default function App() {
   const [editor, setEditor] = useState<LibraryItem | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [managePanels, setManagePanels] = useState(false);
+  const [migrationWarning, setMigrationWarning] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const stored = await window.launcher?.loadState();
-      const next = stored ? normaliseState(stored) : (loadBrowserState() || migrateLegacy());
+      const directDesktop = Boolean(window.launcher?.isDirectDesktop);
+      const next = stored ? normaliseState(stored) : (loadBrowserState() || (directDesktop ? blankState() : migrateLegacy()));
       setState(next);
-      if (!stored) await persist(next);
+      if (!stored && !directDesktop) await persist(next);
+      if (!stored && directDesktop) setMigrationWarning(true);
     })();
   }, []);
 
@@ -221,6 +224,7 @@ export default function App() {
           <button className="control" onClick={() => setManagePanels((current) => !current)}><Settings2 />Manage panels</button>
         </div>
       </header>
+      {migrationWarning && <section className="mb-5 flex items-start gap-3 rounded-xl border border-amber-400/40 bg-amber-400/5 p-4 text-sm text-neutral-300"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" /><div><strong className="text-amber-300">No desktop library was found.</strong><p className="mt-1 text-xs leading-relaxed text-neutral-400">If this is an upgrade from the earlier localhost launcher, install and open the v1.1.0 migration build once before using this direct desktop version. New installations can ignore this notice.</p></div><button className="ml-auto text-xs text-neutral-400 hover:text-white" onClick={() => setMigrationWarning(false)}>Dismiss</button></section>}
 
       {managePanels && <section className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4"><div className="mb-3 flex items-center justify-between"><strong className="text-sm">Dashboard panels</strong><button className="text-xs text-neutral-400 hover:text-white" onClick={() => setManagePanels(false)}>Done</button></div><div className="flex flex-wrap gap-3">{(Object.keys(panelTitles) as PanelId[]).map((panelId) => <label key={panelId} className="flex items-center gap-2 rounded-lg border border-neutral-800 px-3 py-2 text-xs"><input type="checkbox" checked={state.preferences.panels[panelId].visible} onChange={(event) => changePanel(panelId, { visible: event.target.checked })} />{panelTitles[panelId]}</label>)}</div></section>}
 
