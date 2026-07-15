@@ -72,6 +72,23 @@ function migrateLegacy(): LibraryState {
   } catch { /* A blank v2 state is safer than a partial migration. */ }
   return initial;
 }
+function restoreLegacyIconData(state: LibraryState): LibraryState {
+  try {
+    const legacyItems = JSON.parse(localStorage.getItem("launcher_shortcuts") || "[]") as Array<Record<string, unknown>>;
+    const byId = new Map(legacyItems.map((item) => [String(item.id || ""), item]));
+    let changed = false;
+    const items = state.items.map((item) => {
+      if (item.iconDataUrl) return item;
+      const legacy = byId.get(item.id) || legacyItems.find((entry) => cleanTarget(String(entry.execPath || "")) === cleanTarget(item.target));
+      const iconDataUrl = typeof legacy?.iconUrl === "string" ? legacy.iconUrl : undefined;
+      if (!iconDataUrl) return item;
+      changed = true;
+      return { ...item, iconDataUrl };
+    });
+    return changed ? { ...state, items } : state;
+  } catch { return state; }
+}
+
 function saveBrowserState(state: LibraryState) { localStorage.setItem("launcher_library_v2", JSON.stringify(state)); }
 function loadBrowserState(): LibraryState | null {
   try { const raw = localStorage.getItem("launcher_library_v2"); return raw ? normaliseState(JSON.parse(raw)) : null; } catch { return null; }
@@ -90,9 +107,10 @@ export default function App() {
   useEffect(() => {
     void (async () => {
       const stored = await window.launcher?.loadState();
-      const next = stored ? normaliseState(stored) : (loadBrowserState() || migrateLegacy());
+      const loaded = stored ? normaliseState(stored) : (loadBrowserState() || migrateLegacy());
+      const next = restoreLegacyIconData(loaded);
       setState(next);
-      if (!stored) await persist(next);
+      if (!stored || next !== loaded) await persist(next);
     })();
   }, []);
 
