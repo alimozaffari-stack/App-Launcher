@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld("launcher", {
   chooseResource: (kind) => ipcRenderer.invoke("library:choose-resource", kind),
   scanFolder: (folderPath) => ipcRenderer.invoke("library:scan-folder", folderPath),
   getIcon: (target) => ipcRenderer.invoke("library:get-icon", target),
+  pathExists: (target) => ipcRenderer.invoke("library:path-exists", target),
   pathForFile: (file) => webUtils.getPathForFile(file)
 });
