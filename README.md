@@ -1,4 +1,4 @@
-# App Launcher — Direct Desktop Build (v1.2.1)
+# App Launcher — Direct Desktop Build (v1.2.2)
 
 An offline-first Electron library for applications, folders, files, URLs and named workspaces.
 
@@ -23,7 +23,7 @@ The installer is written to `dist-desktop/`.
 
 1. If upgrading from the earlier launcher, first install and open the v1.1.2 migration repair build once.
 2. Confirm that your existing library appears, then close it.
-3. Install this v1.2.1 direct desktop build.
+3. Install this v1.2.2 direct desktop build.
 
 Fresh installations can install this release directly.
 
@@ -38,6 +38,7 @@ Fresh installations can install this release directly.
 - Groups and tags can be deleted or merged, and shortcut labels/tags can be copied and pasted through the edit dialog.
 - Workspace filenames retain their extensions; selected shortcuts support bulk copying and pasting of labels and tags.
 - First launch offers an optional folder scan; Workspaces support A–Z/type arrangement, file-type fallbacks, and a full-width two-column view when other dashboard panels are hidden.
+- Workspace-only file type icons include selected vectors sourced from [SVG Repo](https://www.svgrepo.com/); see the in-app Credits entry and SVG Repo's individual asset licences.
 - Folder scanning uses actual local paths, and matching targets are not imported twice.
 - The Electron bridge handles local opening, scanning, persistence and icon caching; the renderer does not have direct Node access.
 
