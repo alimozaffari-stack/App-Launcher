@@ -25,7 +25,7 @@ input:focus, select:focus, textarea:focus { border-color: #fbbf24; }
 .tag-chip { border: 1px solid #262626; border-radius: .35rem; color: #a3a3a3; padding: .2rem .45rem; font-size: .7rem; }
 .tag-chip:hover { border-color: #525252; color: #fff; }
 .label { color: #737373; font-size: .65rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.workspace-panel { grid-column: 1 / -1; min-height: 18rem; resize: vertical; overflow: auto; }
 @media (min-width: 768px) {
-  .workspace-panel:only-child { grid-column: 1 / -1; }
   .workspace-panel:only-child .workspace-two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
 }
