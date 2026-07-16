@@ -12,6 +12,7 @@ declare global {
       chooseResource(kind: ItemKind): Promise<ImportedResource | null>;
       scanFolder(path: string): Promise<ImportedResource[]>;
       getIcon(target: string): Promise<{ key: string; dataUrl: string } | null>;
+      pathExists(target: string): Promise<boolean>;
       pathForFile(file: File): string;
     };
   }
