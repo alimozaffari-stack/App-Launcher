@@ -27,5 +27,5 @@ input:focus, select:focus, textarea:focus { border-color: #fbbf24; }
 .label { color: #737373; font-size: .65rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-panel { grid-column: 1 / -1; min-height: 18rem; resize: vertical; overflow: auto; }
 @media (min-width: 768px) {
-  .workspace-panel:only-child .workspace-two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
+  .workspace-panel .workspace-two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
 }
