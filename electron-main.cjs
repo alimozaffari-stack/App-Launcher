@@ -127,6 +127,10 @@ function registerIpc() {
   ipcMain.handle("library:save", (_, state) => writeState(state));
   ipcMain.handle("library:open", (_, item) => openItem(item));
   ipcMain.handle("library:get-icon", (_, target) => getIcon(target));
+  ipcMain.handle("library:path-exists", (_, target) => {
+    if (/^(https?:|[a-z][a-z0-9+.-]*:)/i.test(target || "")) return true;
+    return Boolean(target && fssync.existsSync(expandEnvironment(target)));
+  });
   ipcMain.handle("library:scan-folder", (_, target) => scanFolder(target));
   ipcMain.handle("library:choose-resource", async (_, kind) => {
     const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
