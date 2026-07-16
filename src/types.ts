@@ -1,6 +1,7 @@
 export type ItemKind = "app" | "folder" | "file" | "url" | "protocol";
 export type SortMode = "manual" | "alpha" | "date";
 export type LibraryLayout = "flat" | "purpose" | "alpha";
+export type WorkspaceSortMode = "alpha" | "type";
 export type PanelId = "focus" | "favourites" | "recent" | "workspaces";
 
 export interface Group { id: string; name: string; }
@@ -45,6 +46,8 @@ export interface LibraryState {
     panelOrder: PanelId[];
     sortMode: SortMode;
     layout: LibraryLayout;
+    workspaceSortMode: WorkspaceSortMode;
+    onboardingDismissed?: boolean;
   };
 }
 export interface ImportedResource {
