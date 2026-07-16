@@ -259,10 +259,7 @@ export default function App() {
   const recent = [...state.items].filter((item) => item.lastLaunchedAt).sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0)).slice(0, 8);
   const focusItems = state.preferences.focusGroupId === "all" ? state.items : state.preferences.focusGroupId === "none" ? [] : state.items.filter((item) => item.groupIds.includes(state.preferences.focusGroupId));
   const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.preferences.workspaceId) || state.workspaces[0];
-  const workspaceItems = useMemo(() => {
-    const entries = activeWorkspace ? [...activeWorkspace.resources, ...activeWorkspace.itemIds.map((itemId) => state.items.find((item) => item.id === itemId)).filter(Boolean) as Array<LibraryItem | WorkspaceResource>] : [];
-    return entries.sort((a, b) => state.preferences.workspaceSortMode === "type" ? (a.kind.localeCompare(b.kind) || collator.compare(displayName(a, true), displayName(b, true))) : collator.compare(displayName(a, true), displayName(b, true)));
-  }, [activeWorkspace, state.items, state.preferences.workspaceSortMode]);
+  const workspaceItems = (activeWorkspace ? [...activeWorkspace.resources, ...activeWorkspace.itemIds.map((itemId) => state.items.find((item) => item.id === itemId)).filter(Boolean) as Array<LibraryItem | WorkspaceResource>] : []).sort((a, b) => state.preferences.workspaceSortMode === "type" ? (a.kind.localeCompare(b.kind) || collator.compare(displayName(a, true), displayName(b, true))) : collator.compare(displayName(a, true), displayName(b, true)));
   const workspaceOnly = visiblePanels.length === 1 && visiblePanels[0] === "workspaces";
 
   return <div className="min-h-screen bg-neutral-950 text-neutral-200" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
