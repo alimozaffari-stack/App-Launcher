@@ -1,5 +1,7 @@
 import type { ItemKind, ImportedResource, LibraryItem, LibraryState } from "./types";
 
+declare module "*.svg" { const source: string; export default source; }
+
 declare global {
   interface Window {
     launcher?: {
