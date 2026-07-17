@@ -23,7 +23,10 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        shell: pwsh
+        run: |
+          Remove-Item package-lock.json -Force -ErrorAction SilentlyContinue
+          npm install
 
       - name: Build Windows installer
         run: npm run desktop:build
