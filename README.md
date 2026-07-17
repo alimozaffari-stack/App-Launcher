@@ -31,13 +31,11 @@ The installer is written to `dist-desktop/`.
 
 Published desktop releases include a ready-to-install Windows `.exe` in the repository's **Releases** page. Download `App Launcher Setup <version>.exe`, close App Launcher if it is open, and run the downloaded installer. Node.js and the source project are not needed for this route.
 
-## Upgrade procedure
+## Installation and existing-library migration
 
-1. If upgrading from the earlier launcher, first install and open the v1.1.2 migration repair build once.
-2. Confirm that your existing library appears, then close it.
-3. Install this v1.3.0 direct desktop build.
+This is the first public, self-contained desktop release. Download and install it directly; no earlier version is required.
 
-Fresh installations can install this release directly.
+If you previously used an internal or localhost-based pre-release and its library does not appear after installation, use the earlier migration repair build once, then reopen this desktop release.
 
 ## What this release changes
 
