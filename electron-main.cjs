@@ -132,18 +132,26 @@ function registerIpc() {
     return Boolean(target && fssync.existsSync(expandEnvironment(target)));
   });
   ipcMain.handle("library:scan-folder", (_, target) => scanFolder(target));
-  ipcMain.handle("library:choose-resource", async (_, kind) => {
-    const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
-    const result = await dialog.showOpenDialog(mainWindow, { title: kind === "folder" ? "Choose folder" : "Choose file or application", properties });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    const target = result.filePaths[0];
+  const resourceFromTarget = async (target, kind) => {
     if (kind === "folder") return { target, kind: "folder", name: path.basename(target) };
     if (/\.lnk$/i.test(target)) {
       const shortcut = await resolveWindowsShortcut(target);
       if (shortcut?.target) return { target: shortcut.target, kind: inferKind(shortcut.target), name: path.basename(target, path.extname(target)), arguments: shortcut.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut.workingDirectory || undefined, description: shortcut.description || undefined };
     }
     return { target, kind: "file", name: path.basename(target, path.extname(target)) };
+  };
+  const chooseResources = async (kind, multiple = false) => {
+    const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];
+    if (multiple) properties.push("multiSelections");
+    const result = await dialog.showOpenDialog(mainWindow, { title: kind === "folder" ? "Choose folder" : "Choose file or application", properties });
+    if (result.canceled || result.filePaths.length === 0) return [];
+    return Promise.all(result.filePaths.map((target) => resourceFromTarget(target, kind)));
+  };
+  ipcMain.handle("library:choose-resource", async (_, kind) => {
+    const resources = await chooseResources(kind);
+    return resources[0] || null;
   });
+  ipcMain.handle("library:choose-resources", (_, kind) => chooseResources(kind, true));
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
