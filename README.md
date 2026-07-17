@@ -6,11 +6,34 @@ This final desktop build loads its packaged interface directly through Electron.
 
 ## Interface at a glance
 
-![App Launcher interface tour](docs/screenshots/app-launcher-tour.svg)
+### Workspace dashboard
 
-- **Workspaces** keep folders on the left and working files on the right, with file-type icons, verification and relinking.
-- **Dashboard panels** can be shown, hidden, collapsed and reordered.
-- **Folder scan** imports local applications and shortcuts; items can then be edited with purposes, additional groups and tags.
+![Workspace dashboard](docs/screenshots/workspace-dashboard.svg)
+
+Workspaces keep folders on the left and working files on the right, while the lower panels provide Favourites, a selected Focus group, and Recent items.
+
+### Working folders and files
+
+![Workspace folder and file columns](docs/screenshots/workspace-detail.svg)
+
+Add, verify, relink and remove working folders or files without changing the originals.
+
+### Import and organisation
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/folder-scan.svg" alt="Folder scan dialog" /></td>
+    <td><img src="docs/screenshots/panel-management.svg" alt="Dashboard panel management" /></td>
+  </tr>
+</table>
+
+Scan a folder for local items, and show, hide, collapse or reorder dashboard panels.
+
+### Item details
+
+<img src="docs/screenshots/item-editor.svg" alt="Item editor with purposes and tags" width="560" />
+
+Each item can have a primary purpose, additional groups, and reusable tags.
 
 ## Run and package
 
