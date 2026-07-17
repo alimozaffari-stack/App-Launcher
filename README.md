@@ -1,4 +1,4 @@
-# App Launcher — Direct Desktop Build (v1.2.9)
+# App Launcher — Direct Desktop Build (v1.3.0)
 
 An offline-first Electron library for applications, folders, files, URLs and named workspaces.
 
@@ -19,11 +19,15 @@ npm run desktop:build
 
 The installer is written to `dist-desktop/`.
 
+## Downloading the Windows installer
+
+Published desktop releases include a ready-to-install Windows `.exe` in the repository's **Releases** page. Download `App Launcher Setup <version>.exe`, close App Launcher if it is open, and run the downloaded installer. Node.js and the source project are not needed for this route.
+
 ## Upgrade procedure
 
 1. If upgrading from the earlier launcher, first install and open the v1.1.2 migration repair build once.
 2. Confirm that your existing library appears, then close it.
-3. Install this v1.2.9 direct desktop build.
+3. Install this v1.3.0 direct desktop build.
 
 Fresh installations can install this release directly.
 
@@ -41,6 +45,7 @@ Fresh installations can install this release directly.
 - Workspace-only file type icons include selected vectors sourced from [SVG Repo](https://www.svgrepo.com/); see the in-app Credits entry and SVG Repo's individual asset licences.
 - Workspace entries can be verified, relinked, or removed without touching the underlying file or folder.
 - Workspaces takes the full dashboard width by default, supports vertical resizing, and grouped library sections support Collapse all / Expand all.
+- Workspace-only Add folder and Add file support selecting multiple folders or files at once.
 - Folder scanning uses actual local paths, and matching targets are not imported twice.
 - The Electron bridge handles local opening, scanning, persistence and icon caching; the renderer does not have direct Node access.
 
