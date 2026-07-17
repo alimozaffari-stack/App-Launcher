@@ -10,6 +10,7 @@ declare global {
       saveState(state: LibraryState): Promise<boolean>;
       openItem(item: LibraryItem): Promise<{ ok: boolean; error?: string }>;
       chooseResource(kind: ItemKind): Promise<ImportedResource | null>;
+      chooseResources(kind: "folder" | "file"): Promise<ImportedResource[]>;
       scanFolder(path: string): Promise<ImportedResource[]>;
       getIcon(target: string): Promise<{ key: string; dataUrl: string } | null>;
       pathExists(target: string): Promise<boolean>;
