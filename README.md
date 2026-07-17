@@ -4,6 +4,14 @@ An offline-first Electron library for applications, folders, files, URLs and nam
 
 This final desktop build loads its packaged interface directly through Electron. It contains no Express server, no localhost service and no external backend.
 
+## Interface at a glance
+
+![App Launcher interface tour](docs/screenshots/app-launcher-tour.svg)
+
+- **Workspaces** keep folders on the left and working files on the right, with file-type icons, verification and relinking.
+- **Dashboard panels** can be shown, hidden, collapsed and reordered.
+- **Folder scan** imports local applications and shortcuts; items can then be edited with purposes, additional groups and tags.
+
 ## Run and package
 
 ```bash
