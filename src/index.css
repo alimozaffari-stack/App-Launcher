@@ -1,15 +1,31 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-display: "Space Grotesk", sans-serif;
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #050505; color: #e7e7e7; }
+body { margin: 0; min-width: 320px; background: #050505; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+* { box-sizing: border-box; }
+input, select, textarea { width: 100%; border: 1px solid #404040; border-radius: .5rem; background: #0a0a0a; color: #f5f5f5; padding: .5rem .65rem; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: #fbbf24; }
+.control { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid #404040; border-radius: .5rem; background: #111; color: #ddd; padding: .45rem .65rem; font-size: .75rem; font-weight: 600; }
+.control:hover { border-color: #737373; color: #fff; }
+.control svg { width: .9rem; height: .9rem; }
+.control.primary { border-color: #fbbf24; background: #fbbf24; color: #111; }
+.control.primary:hover { background: #fcd34d; }
+.control.compact { padding: .35rem .5rem; }
+.control.danger, .icon-button.danger { color: #fca5a5; }
+.icon-button { display: inline-grid; height: 1.7rem; width: 1.7rem; place-items: center; border: 1px solid transparent; border-radius: .375rem; color: #a3a3a3; background: transparent; }
+.icon-button:hover { border-color: #404040; color: #fff; background: #171717; }
+.icon-button svg { width: .9rem; height: .9rem; }
+.panel-select, .bulk-select { width: auto; max-width: 11rem; padding: .3rem .4rem; border-radius: .375rem; font-size: .7rem; }
+.chip { border: 1px solid transparent; border-radius: .5rem; background: #111; color: #a3a3a3; padding: .38rem .65rem; font-size: .75rem; font-weight: 600; }
+.chip:hover { background: #1c1c1c; color: #fff; }
+.chip.active { border-color: #d97706; background: #3a2800; color: #fbbf24; }
+.chip.add { border-style: dashed; border-color: #404040; }
+.tag-chip { border: 1px solid #262626; border-radius: .35rem; color: #a3a3a3; padding: .2rem .45rem; font-size: .7rem; }
+.tag-chip:hover { border-color: #525252; color: #fff; }
+.label { color: #737373; font-size: .65rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.workspace-panel { grid-column: 1 / -1; min-height: 18rem; resize: vertical; overflow: auto; }
+@media (min-width: 768px) {
+  .workspace-panel .workspace-two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
 }
-
-body {
-  background-color: #0a0a0a;
-  color: #e5e5e5;
-  font-family: var(--font-sans);
-}
-

@@ -1,1771 +1,390 @@
-import React, { useState, useEffect } from "react";
-import { Shortcut } from "./types";
+import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import {
-  Play,
-  Plus,
-  Search,
-  Sparkles,
-  Layers,
-  Tag,
-  Loader2,
-  Terminal,
-  HelpCircle,
-  X,
-  Copy,
-  Download,
-  Check,
-  ExternalLink,
-  Laptop,
-  FolderPlus,
-  Cpu,
-  Trash2,
-  LayoutGrid,
-  List,
-  Star,
-  Bookmark,
-  ArrowDownAZ
+  AppWindow, ArchiveRestore, Check, ChevronDown, ChevronRight, CircleAlert, File, FileArchive, FileAudio, FileCode2, FileImage, FileSpreadsheet, FileText, FileVideo, FilePlus2,
+  Folder, FolderOpen, GripVertical, LayoutList, Layers3, ListFilter, Plus, Presentation, Search, Settings2,
+  Star, Tag, Trash2, X, Zap
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  rectSortingStrategy,
-} from "@dnd-kit/sortable";
-import ShortcutCard from "./components/ShortcutCard";
-import ShortcutForm from "./components/ShortcutForm";
-import EmptyState from "./components/EmptyState";
-import FolderScanModal from "./components/FolderScanModal";
+import type { Group, ImportedResource, ItemKind, LibraryItem, LibraryLayout, LibraryState, PanelId, SortMode, Workspace, WorkspaceResource, WorkspaceSortMode } from "./types";
 
-interface CategoryDoc {
-  id: string;
-  name: string;
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+const workspaceIcon = (name: string) => new URL(`./assets/workspace-file-icons/${name}.svg`, import.meta.url).href;
+const pdfIcon = workspaceIcon("pdf-new"), wordIcon = workspaceIcon("word-new"), spreadsheetIcon = workspaceIcon("spreadsheet-new"), codeIcon = workspaceIcon("code-new"), imageIcon = workspaceIcon("image-new"), audioIcon = workspaceIcon("audio-new"), markdownIcon = workspaceIcon("markdown-new"), documentIcon = workspaceIcon("document-new"), applicationIcon = workspaceIcon("app-file"), googleDocIcon = workspaceIcon("gdoc"), utilityIcon = workspaceIcon("utility"), comIcon = workspaceIcon("com"), movieIcon = workspaceIcon("movie-new"), jsonPyIcon = workspaceIcon("json-py");
+const panelTitles: Record<PanelId, string> = { focus: "Focus group", favourites: "Favourites", recent: "Recent", workspaces: "Workspaces" };
+const panelIds: PanelId[] = ["workspaces", "focus", "favourites", "recent"];
+const defaultPanelPreferences = {
+  focus: { visible: true, collapsed: false }, favourites: { visible: true, collapsed: false },
+  recent: { visible: true, collapsed: false }, workspaces: { visible: true, collapsed: false }
+};
+const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const cleanTarget = (target: string) => target.trim().replace(/\//g, "\\").replace(/\\+$/, "").toLocaleLowerCase();
+const groupId = (name: string) => `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "other"}`;
+const kindFromPath = (target: string): ItemKind => {
+  if (/^https?:/i.test(target)) return "url";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return "protocol";
+  if (/\.(exe|bat|cmd|lnk)$/i.test(target)) return "app";
+  return "file";
+};
+const displayName = (item: LibraryItem | WorkspaceResource, includeExtension = false) => {
+  const extension = (includeExtension || item.kind === "file") ? (item.target.match(/(\.[^\\/.]+)$/)?.[1] || "") : "";
+  return extension && !item.name.toLowerCase().endsWith(extension.toLowerCase()) ? `${item.name}${extension}` : item.name;
+};
+
+function makeGroup(name: string): Group { return { id: groupId(name), name: name.trim() }; }
+function blankState(): LibraryState {
+  const groups = ["Applications", "Current Work", "Knowledge Management", "Office", "Others", "Research", "Utility"].map(makeGroup);
+  return { version: 2, groups, items: [], workspaces: [], preferences: { focusGroupId: "none", panels: defaultPanelPreferences, panelOrder: panelIds, sortMode: "manual", layout: "flat", workspaceSortMode: "alpha" } };
+}
+function normaliseState(value: LibraryState): LibraryState {
+  return {
+    ...value,
+    version: 2,
+    groups: [...(value.groups || [])].sort((a, b) => collator.compare(a.name, b.name)),
+    items: value.items || [], workspaces: (value.workspaces || []).map((workspace) => ({ ...workspace, resources: workspace.resources || [] })),
+    preferences: {
+      focusGroupId: value.preferences?.focusGroupId || "none",
+      workspaceId: value.preferences?.workspaceId,
+      panelOrder: JSON.stringify(value.preferences?.panelOrder) === JSON.stringify(["focus", "favourites", "recent", "workspaces"]) ? panelIds : [...new Set([...(value.preferences?.panelOrder || []), ...panelIds])] as PanelId[],
+      sortMode: value.preferences?.sortMode || "manual",
+      layout: value.preferences?.layout || "flat",
+      workspaceSortMode: value.preferences?.workspaceSortMode || "alpha",
+      onboardingDismissed: value.preferences?.onboardingDismissed,
+      panels: { ...defaultPanelPreferences, ...(value.preferences?.panels || {}) }
+    }
+  };
+}
+function migrateLegacy(): LibraryState {
+  const initial = blankState();
+  try {
+    const rawCategories = JSON.parse(localStorage.getItem("launcher_categories") || "[]") as Array<string | { name: string }>;
+    const categoryNames = rawCategories.map((entry) => typeof entry === "string" ? entry : entry.name).filter(Boolean);
+    if (categoryNames.length) initial.groups = categoryNames.map(makeGroup);
+    const rawItems = JSON.parse(localStorage.getItem("launcher_shortcuts") || "[]") as Array<Record<string, unknown>>;
+    if (!rawItems.length) return initial;
+    localStorage.setItem("launcher_shortcuts_backup_v1", JSON.stringify(rawItems));
+    const fallback = initial.groups.find((group) => group.name === "Others") || initial.groups[0];
+    initial.items = rawItems.map((legacy, index) => {
+      const category = typeof legacy.category === "string" ? legacy.category : fallback.name;
+      let group = initial.groups.find((item) => item.name.toLowerCase() === category.toLowerCase());
+      if (!group) { group = makeGroup(category); initial.groups.push(group); }
+      const target = String(legacy.execPath || "");
+      return {
+        id: String(legacy.id || id("item")), name: String(legacy.name || "Untitled item"), target,
+        kind: kindFromPath(target), arguments: [], description: typeof legacy.description === "string" ? legacy.description : undefined,
+        primaryGroupId: group.id, groupIds: [group.id], tags: Array.isArray(legacy.tags) ? legacy.tags.map(String) : [],
+        iconDataUrl: typeof legacy.iconUrl === "string" ? legacy.iconUrl : undefined,
+        createdAt: Number(legacy.createdAt) || Date.now(), order: Number(legacy.order) || index,
+        isFavourite: Boolean(legacy.isFavorite), lastLaunchedAt: Number(legacy.lastLaunchedAt) || undefined
+      };
+    });
+    const nominated = localStorage.getItem("launcher_nominated_category");
+    initial.preferences.focusGroupId = initial.groups.find((group) => group.name === nominated)?.id || "none";
+    initial.groups.sort((a, b) => collator.compare(a.name, b.name));
+  } catch { /* A blank v2 state is safer than a partial migration. */ }
+  return initial;
+}
+function saveBrowserState(state: LibraryState) { localStorage.setItem("launcher_library_v2", JSON.stringify(state)); }
+function loadBrowserState(): LibraryState | null {
+  try { const raw = localStorage.getItem("launcher_library_v2"); return raw ? normaliseState(JSON.parse(raw)) : null; } catch { return null; }
 }
 
 export default function App() {
-  const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
-  const [categories, setCategories] = useState<CategoryDoc[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  
-  // View mode (grid or list)
-  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
-    const saved = localStorage.getItem("launcher_view_mode");
-    return (saved === "grid" || saved === "list") ? saved : "grid";
-  });
-  
-  // UI States
-  const [showForm, setShowForm] = useState(false);
-  const [showScanModal, setShowScanModal] = useState(false);
-  const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
-  const [launchingShortcut, setLaunchingShortcut] = useState<Shortcut | null>(null);
-  
-  // Launching Modal status
-  const [launchStatus, setLaunchStatus] = useState<"connecting" | "success" | "fallback" | "connecting_local">("connecting");
-  const [launchError, setLaunchError] = useState("");
-  const [copiedCmd, setCopiedCmd] = useState(false);
+  const [state, setState] = useState<LibraryState | null>(null);
+  const [query, setQuery] = useState("");
+  const [activeGroupId, setActiveGroupId] = useState("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [notice, setNotice] = useState<string | null>(null);
+  const [editor, setEditor] = useState<LibraryItem | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [managePanels, setManagePanels] = useState(false);
+  const [migrationWarning, setMigrationWarning] = useState(false);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
+  const [nameDialog, setNameDialog] = useState<"group" | "workspace" | null>(null);
+  const [labelManagerOpen, setLabelManagerOpen] = useState(false);
+  const [copiedMetadata, setCopiedMetadata] = useState<Pick<LibraryItem, "primaryGroupId" | "groupIds" | "tags"> | null>(null);
+  const [workspaceDeleteArmed, setWorkspaceDeleteArmed] = useState(false);
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(new Set());
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  const [brokenWorkspaceIds, setBrokenWorkspaceIds] = useState<Set<string>>(new Set());
 
-  // PWA and File Drag states
-  const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  
-  // Hover states for drop-expand popular tags
-  const [isHeaderHovered, setIsHeaderHovered] = useState(false);
-  const [isGroupsHovered, setIsGroupsHovered] = useState(false);
-  const [isTagsHovered, setIsTagsHovered] = useState(false);
-
-  // Nominated Group (pinned category) on the dashboard
-  const [nominatedCategory, setNominatedCategory] = useState<string>(() => {
-    return localStorage.getItem("launcher_nominated_category") || "Office";
-  });
-
-  // Sort mode: "manual", "alphabetical", or "date"
-  const [sortMode, setSortMode] = useState<"manual" | "alphabetical" | "date">(() => {
-    const saved = localStorage.getItem("launcher_sort_mode");
-    return (saved === "manual" || saved === "alphabetical" || saved === "date") ? saved : "manual";
-  });
-
-  const handleToggleFavorite = (id: string) => {
-    const updated = shortcuts.map((s) => {
-      if (s.id === id) {
-        return { ...s, isFavorite: !s.isFavorite };
-      }
-      return s;
-    });
-    setShortcuts(updated);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-  };
-
-  // Listen for PWA Install Prompt
   useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-    };
+    void (async () => {
+      const stored = await window.launcher?.loadState();
+      const directDesktop = Boolean(window.launcher?.isDirectDesktop);
+      const next = stored ? normaliseState(stored) : (loadBrowserState() || (directDesktop ? blankState() : migrateLegacy()));
+      setState(next);
+      if (!stored && !directDesktop) await persist(next);
+      if (!stored && directDesktop) setMigrationWarning(true);
+    })();
   }, []);
 
-  const handleInstallApp = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === "accepted") {
-      console.log("PWA Installation accepted by the user");
-    }
-    setDeferredPrompt(null);
-  };
+  async function persist(next: LibraryState) {
+    const normalised = normaliseState(next);
+    setState(normalised);
+    if (window.launcher) await window.launcher.saveState(normalised);
+    else saveBrowserState(normalised);
+  }
+  function change(mutator: (current: LibraryState) => LibraryState) { if (state) void persist(mutator(state)); }
+  function flash(message: string) { setNotice(message); window.setTimeout(() => setNotice(null), 4000); }
 
-  // Drag-and-drop file import handlers
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer && e.dataTransfer.types.includes("Files")) {
-      setIsDraggingFile(true);
-    }
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    // Set dragging false only when we exit the screen bounds
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX;
-    const y = e.clientY;
-    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) {
-      setIsDraggingFile(false);
-    }
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingFile(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length === 0) return;
-
-    // Convert dropped files into shortcuts
-    const newShortcutsList = files.map((file: File) => {
-      let baseName = file.name;
-      const dotIndex = baseName.lastIndexOf(".");
-      const ext = dotIndex !== -1 ? baseName.substring(dotIndex + 1).toLowerCase() : "";
-      if (dotIndex !== -1) {
-        baseName = baseName.substring(0, dotIndex);
-      }
-
-      const prettifiedName = baseName
-        .replace(/[-_.]/g, " ")
-        .replace(/\b\w/g, (char) => char.toUpperCase());
-
-      let suggestedPath = "";
-      if (ext === "exe") {
-        if (baseName.toLowerCase() === "chrome") {
-          suggestedPath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-        } else if (baseName.toLowerCase() === "firefox") {
-          suggestedPath = "C:\\Program Files\\Mozilla Firefox\\firefox.exe";
-        } else if (baseName.toLowerCase() === "notepad") {
-          suggestedPath = "C:\\Windows\\System32\\notepad.exe";
-        } else if (baseName.toLowerCase() === "cmd") {
-          suggestedPath = "C:\\Windows\\System32\\cmd.exe";
-        } else {
-          suggestedPath = `C:\\Program Files\\${prettifiedName}\\${file.name}`;
-        }
-      } else if (ext === "lnk" || ext === "url") {
-        suggestedPath = `%USERPROFILE%\\Desktop\\${file.name}`;
-      } else {
-        suggestedPath = `C:\\Path\\To\\${file.name}`;
-      }
-
-      let cat = selectedCategory !== "All" ? selectedCategory : "Others";
-      const hasCat = categories.some((c) => c.name === cat);
-      if (!hasCat) {
-        cat = "Others";
-      }
-
-      const tags = ["Imported"];
-      if (ext) tags.push(ext.toUpperCase());
-
-      return {
-        name: prettifiedName,
-        execPath: suggestedPath,
-        category: cat,
-        tags,
-        description: `Dropped & imported local file (${file.name}).`,
-      };
+  const groups = useMemo(() => state ? [...state.groups].sort((a, b) => collator.compare(a.name, b.name)) : [], [state]);
+  const groupName = (identifier: string) => groups.find((group) => group.id === identifier)?.name || "Unassigned";
+  const allTags = useMemo(() => state ? [...new Set(state.items.flatMap((item) => item.tags))].sort(collator.compare) : [], [state]);
+  const displayItems = useMemo(() => {
+    if (!state) return [];
+    const term = query.trim().toLocaleLowerCase();
+    const filtered = state.items.filter((item) => {
+      const inGroup = activeGroupId === "all" || item.groupIds.includes(activeGroupId);
+      const searchable = [item.name, item.description || "", ...item.tags, ...item.groupIds.map(groupName)].join(" ").toLocaleLowerCase();
+      return inGroup && (!term || searchable.includes(term));
     });
+    if (state.preferences.sortMode === "alpha") return [...filtered].sort((a, b) => collator.compare(a.name, b.name));
+    if (state.preferences.sortMode === "date") return [...filtered].sort((a, b) => b.createdAt - a.createdAt);
+    return [...filtered].sort((a, b) => a.order - b.order);
+  }, [state, query, activeGroupId, groups]);
 
-    if (newShortcutsList.length === 1) {
-      const firstItem = newShortcutsList[0];
-      
-      let extractedIconUrl: string | undefined = undefined;
-      try {
-        const response = await fetch("/api/extract-icon", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ execPath: firstItem.execPath }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.iconUrl) {
-            extractedIconUrl = data.iconUrl;
-          }
-        }
-      } catch (err) {
-        console.warn("Auto extraction on drop failed (expected on cloud sandbox):", err);
-      }
-
-      const newShortcut: Shortcut = {
-        id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        name: firstItem.name,
-        execPath: firstItem.execPath,
-        category: firstItem.category,
-        tags: firstItem.tags,
-        description: firstItem.description,
-        iconUrl: extractedIconUrl,
-        createdAt: Date.now(),
-      };
-      setEditingShortcut(newShortcut);
-      setShowForm(true);
-    } else {
-      const createdItems = newShortcutsList.map((item) => ({
-        ...item,
-        id: `sc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        createdAt: Date.now(),
-      })) as Shortcut[];
-      
-      const updatedShortcuts = [...shortcuts, ...createdItems];
-      setShortcuts(updatedShortcuts);
-      localStorage.setItem("launcher_shortcuts", JSON.stringify(updatedShortcuts));
-      alert(`Imported ${createdItems.length} shortcuts into the "${createdItems[0].category}" group!`);
-    }
-  };
-
-  // Load shortcuts and categories from localStorage on mount
-  useEffect(() => {
-    // 1. Categories
-    const storedCats = localStorage.getItem("launcher_categories");
-    let currentCats: CategoryDoc[] = [];
-    if (storedCats) {
-      try {
-        currentCats = JSON.parse(storedCats);
-      } catch (e) {
-        console.error("Error parsing stored categories:", e);
-      }
-    }
-    if (currentCats.length === 0) {
-      const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
-      currentCats = defaults.map((name, i) => ({ id: `cat-${Date.now()}-${i}`, name }));
-      localStorage.setItem("launcher_categories", JSON.stringify(currentCats));
-    }
-    setCategories(currentCats);
-
-    // 2. Shortcuts
-    const storedShortcuts = localStorage.getItem("launcher_shortcuts");
-    let currentShortcuts: Shortcut[] = [];
-    if (storedShortcuts) {
-      try {
-        currentShortcuts = JSON.parse(storedShortcuts);
-      } catch (e) {
-        console.error("Error parsing stored shortcuts:", e);
-      }
-    }
-    // Sort loaded shortcuts by order if it exists, fallback to createdAt descending
-    currentShortcuts.sort((a, b) => {
-      const aOrder = a.order !== undefined ? a.order : 999999;
-      const bOrder = b.order !== undefined ? b.order : 999999;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return b.createdAt - a.createdAt;
+  function addGroup(name: string) {
+    const clean = name.trim(); if (!clean || !state) return;
+    if (state.groups.some((group) => group.name.toLocaleLowerCase() === clean.toLocaleLowerCase())) { flash("That group already exists."); return; }
+    change((current) => ({ ...current, groups: [...current.groups, makeGroup(clean)] }));
+  }
+  function deleteGroup(groupId: string) {
+    if (!state || state.groups.length < 2) { flash("At least one group must remain."); return; }
+    const fallback = state.groups.find((group) => group.id !== groupId) as Group;
+    change((current) => ({ ...current, groups: current.groups.filter((group) => group.id !== groupId), items: current.items.map((item) => item.primaryGroupId !== groupId && !item.groupIds.includes(groupId) ? item : { ...item, primaryGroupId: item.primaryGroupId === groupId ? fallback.id : item.primaryGroupId, groupIds: [...new Set(item.groupIds.filter((id) => id !== groupId).concat(item.primaryGroupId === groupId ? [fallback.id] : []))] }) }));
+  }
+  function mergeGroup(sourceId: string, targetId: string) {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    change((current) => ({ ...current, groups: current.groups.filter((group) => group.id !== sourceId), items: current.items.map((item) => ({ ...item, primaryGroupId: item.primaryGroupId === sourceId ? targetId : item.primaryGroupId, groupIds: [...new Set(item.groupIds.map((id) => id === sourceId ? targetId : id))] })) }));
+  }
+  function deleteTag(tag: string) { change((current) => ({ ...current, items: current.items.map((item) => ({ ...item, tags: item.tags.filter((entry) => entry !== tag) })) })); }
+  function mergeTag(source: string, target: string) { const clean = target.trim().toLowerCase(); if (!source || !clean || source === clean) return; change((current) => ({ ...current, items: current.items.map((item) => ({ ...item, tags: [...new Set(item.tags.map((tag) => tag === source ? clean : tag))].sort(collator.compare) })) })); }
+  function addWorkspace(name: string) {
+    if (!state || !name.trim()) return;
+    if (state.workspaces.some((workspace) => workspace.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase())) { flash("That workspace already exists."); return; }
+    const workspace: Workspace = { id: id("workspace"), name: name.trim(), itemIds: [], resources: [] };
+    change((current) => ({ ...current, workspaces: [...current.workspaces, workspace], preferences: { ...current.preferences, workspaceId: workspace.id } }));
+  }
+  function deleteWorkspace() {
+    if (!activeWorkspace) return;
+    if (!workspaceDeleteArmed) { setWorkspaceDeleteArmed(true); flash("Click the red workspace delete button again to confirm."); return; }
+    change((current) => ({ ...current, workspaces: current.workspaces.filter((workspace) => workspace.id !== activeWorkspace.id), preferences: { ...current.preferences, workspaceId: current.workspaces.find((workspace) => workspace.id !== activeWorkspace.id)?.id } }));
+    setWorkspaceDeleteArmed(false);
+  }
+  function toggleSelection(itemId: string) {
+    setSelectedIds((current) => { const next = new Set(current); next.has(itemId) ? next.delete(itemId) : next.add(itemId); return next; });
+  }
+  function selectVisible() { setSelectedIds(new Set(displayItems.map((item) => item.id))); }
+  function updateItem(updated: LibraryItem) { change((current) => ({ ...current, items: current.items.map((item) => item.id === updated.id ? updated : item) })); }
+  function deleteItems(itemIds: Set<string>) {
+    if (!itemIds.size || !window.confirm(`Remove ${itemIds.size} item${itemIds.size === 1 ? "" : "s"} from the launcher?`)) return;
+    change((current) => ({ ...current, items: current.items.filter((item) => !itemIds.has(item.id)), workspaces: current.workspaces.map((workspace) => ({ ...workspace, itemIds: workspace.itemIds.filter((itemId) => !itemIds.has(itemId)) })) }));
+    setSelectedIds(new Set());
+  }
+  function assignGroup(itemIds: Set<string>, nextGroupId: string, makePrimary = false) {
+    if (!nextGroupId) return;
+    change((current) => ({ ...current, items: current.items.map((item) => !itemIds.has(item.id) ? item : {
+      ...item, primaryGroupId: makePrimary ? nextGroupId : item.primaryGroupId,
+      groupIds: [...new Set([...item.groupIds, nextGroupId])]
+    }) }));
+  }
+  function toggleFavourite(itemIds: Set<string>, value?: boolean) {
+    change((current) => ({ ...current, items: current.items.map((item) => itemIds.has(item.id) ? { ...item, isFavourite: value ?? !item.isFavourite } : item) }));
+  }
+  function addSelectedToWorkspace(workspaceId: string) {
+    if (!workspaceId || !selectedIds.size) return;
+    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => workspace.id === workspaceId ? { ...workspace, itemIds: [...new Set([...workspace.itemIds, ...selectedIds])] } : workspace) }));
+    flash(`${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"} added to the workspace.`);
+  }
+  function copyMetadataFrom(itemId: string) { const source = state?.items.find((item) => item.id === itemId); if (source) { setCopiedMetadata({ primaryGroupId: source.primaryGroupId, groupIds: source.groupIds, tags: source.tags }); flash(`Copied labels and tags from ${source.name}.`); } }
+  function pasteMetadataToSelected() { if (!copiedMetadata || !selectedIds.size) return; change((current) => ({ ...current, items: current.items.map((item) => !selectedIds.has(item.id) ? item : { ...item, primaryGroupId: copiedMetadata.primaryGroupId, groupIds: copiedMetadata.groupIds.filter((id) => current.groups.some((group) => group.id === id)), tags: copiedMetadata.tags }) })); flash(`Pasted labels and tags to ${selectedIds.size} selected item${selectedIds.size === 1 ? "" : "s"}.`); }
+  async function addDirectWorkspaceResource(kind: "folder" | "file") {
+    if (!activeWorkspace) { flash("Create or select a workspace first."); return; }
+    const resources = await window.launcher?.chooseResources(kind) || [];
+    if (!resources.length) return;
+    const entries = resources.map((resource) => ({ id: id("workspace-resource"), name: resource.name || "Untitled resource", target: resource.target, kind: resource.kind, arguments: resource.arguments || [], workingDirectory: resource.workingDirectory, description: resource.description } satisfies WorkspaceResource));
+    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => {
+      if (workspace.id !== activeWorkspace.id) return workspace;
+      const existingTargets = new Set(workspace.resources.map((resource) => cleanTarget(resource.target)));
+      const additions = entries.filter((entry) => !existingTargets.has(cleanTarget(entry.target)));
+      return { ...workspace, resources: [...workspace.resources, ...additions] };
+    }) }));
+    flash(`${entries.length} ${kind}${entries.length === 1 ? "" : "s"} added to the workspace.`);
+  }
+  function removeWorkspaceEntry(itemId: string) {
+    if (!activeWorkspace) return;
+    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => workspace.id !== activeWorkspace.id ? workspace : { ...workspace, resources: workspace.resources.filter((resource) => resource.id !== itemId), itemIds: workspace.itemIds.filter((id) => id !== itemId) }) }));
+    setBrokenWorkspaceIds((current) => { const next = new Set(current); next.delete(itemId); return next; });
+  }
+  async function relinkWorkspaceEntry(itemId: string) {
+    if (!activeWorkspace) return;
+    const existing = activeWorkspace.resources.find((resource) => resource.id === itemId);
+    if (!existing) { flash("This is a library shortcut. Edit it in the main library to relink it."); return; }
+    const replacement = await window.launcher?.chooseResource(existing.kind === "folder" ? "folder" : "file");
+    if (!replacement) return;
+    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => workspace.id !== activeWorkspace.id ? workspace : { ...workspace, resources: workspace.resources.map((resource) => resource.id !== itemId ? resource : { ...resource, name: replacement.name || resource.name, target: replacement.target, kind: replacement.kind, arguments: replacement.arguments || [], workingDirectory: replacement.workingDirectory, description: replacement.description }) }) }));
+    setBrokenWorkspaceIds((current) => { const next = new Set(current); next.delete(itemId); return next; });
+  }
+  async function verifyWorkspace() {
+    if (!activeWorkspace) return;
+    const entries: Array<LibraryItem | WorkspaceResource> = [...activeWorkspace.resources, ...activeWorkspace.itemIds.map((itemId) => state?.items.find((item) => item.id === itemId)).filter(Boolean) as Array<LibraryItem | WorkspaceResource>];
+    const results = await Promise.all(entries.map(async (item) => ({ id: item.id, exists: await window.launcher?.pathExists(item.target) })));
+    const broken = new Set(results.filter((result) => !result.exists).map((result) => result.id)); setBrokenWorkspaceIds(broken);
+    flash(broken.size ? `${broken.size} workspace link${broken.size === 1 ? " is" : "s are"} unavailable. Use Relink or Remove.` : "All workspace links are available.");
+  }
+  function addResources(resources: ImportedResource[]) {
+    if (!state || !resources.length) return;
+    const defaultGroup = groups.find((group) => group.id === activeGroupId) || groups.find((group) => group.name === "Others") || groups[0];
+    const targets = new Set(state.items.map((item) => `${item.kind}:${cleanTarget(item.target)}`));
+    const additions: LibraryItem[] = [];
+    let duplicates = 0;
+    resources.forEach((resource, index) => {
+      const fingerprint = `${resource.kind}:${cleanTarget(resource.target)}`;
+      if (!resource.target || targets.has(fingerprint)) { duplicates += 1; return; }
+      targets.add(fingerprint);
+      additions.push({ id: id("item"), name: resource.name || "Untitled item", target: resource.target, kind: resource.kind || kindFromPath(resource.target), arguments: resource.arguments || [], workingDirectory: resource.workingDirectory, description: resource.description, primaryGroupId: defaultGroup.id, groupIds: [defaultGroup.id], tags: [...new Set(resource.tags || [])].sort(collator.compare), createdAt: Date.now(), order: index, isFavourite: false });
     });
-
-    setShortcuts(currentShortcuts);
-    setLoading(false);
-  }, []);
-
-  // Save shortcut (Add / Update)
-  const handleSaveShortcut = async (
-    data: Omit<Shortcut, "id" | "createdAt"> & { id?: string }
-  ) => {
-    let updated: Shortcut[];
-    const isExisting = data.id && shortcuts.some((s) => s.id === data.id);
-    if (isExisting) {
-      // Update
-      updated = shortcuts.map((s) => {
-        if (s.id === data.id) {
-          return {
-            ...s,
-            name: data.name,
-            execPath: data.execPath,
-            category: data.category,
-            tags: data.tags,
-            description: data.description,
-            iconUrl: data.iconUrl || undefined,
-          };
-        }
-        return s;
-      });
-    } else {
-      // Create
-      const newShortcut: Shortcut = {
-        id: data.id || `sc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        name: data.name,
-        execPath: data.execPath,
-        category: data.category,
-        tags: data.tags,
-        description: data.description,
-        iconUrl: data.iconUrl || undefined,
-        createdAt: Date.now(),
-        order: -1,
-      };
-      
-      // Place the new shortcut at the beginning and re-normalize orders
-      updated = [newShortcut, ...shortcuts].map((s, index) => ({
-        ...s,
-        order: index,
-      }));
-    }
-    setShortcuts(updated);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-  };
-
-  // Sensors configuration for dnd-kit
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8, // Requires dragging 8px before drag begins so clicking buttons is not intercepted
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  // Handle manual drag and drop sorting
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    setShortcuts((prevShortcuts) => {
-      const activeIndex = prevShortcuts.findIndex((s) => s.id === active.id);
-      const overIndex = prevShortcuts.findIndex((s) => s.id === over.id);
-
-      if (activeIndex === -1 || overIndex === -1) return prevShortcuts;
-
-      const newShortcuts = arrayMove(prevShortcuts, activeIndex, overIndex);
-
-      // Re-assign order based on the new array sequence
-      const updatedWithOrder = (newShortcuts as Shortcut[]).map((s, index) => ({
-        ...s,
-        order: index,
-      }));
-
-      localStorage.setItem("launcher_shortcuts", JSON.stringify(updatedWithOrder));
-      return updatedWithOrder;
+    if (additions.length) change((current) => ({ ...current, items: [...additions, ...current.items].map((item, index) => ({ ...item, order: index })) }));
+    flash(`${additions.length} item${additions.length === 1 ? "" : "s"} added${duplicates ? `; ${duplicates} duplicate${duplicates === 1 ? " was" : "s were"} skipped` : ""}.`);
+  }
+  async function chooseResource(kind: ItemKind) { const resource = await window.launcher?.chooseResource(kind); if (resource) addResources([resource]); }
+  async function launch(item: LibraryItem | WorkspaceResource) {
+    const result = await window.launcher?.openItem(item as LibraryItem);
+    if (result && !result.ok) { flash(result.error || "Could not open this item."); return; }
+    if ("isFavourite" in item) change((current) => ({ ...current, items: current.items.map((entry) => entry.id === item.id ? { ...entry, lastLaunchedAt: Date.now() } : entry) }));
+  }
+  function reorder(sourceId: string, targetId: string) {
+    if (!state || state.preferences.sortMode !== "manual" || sourceId === targetId) return;
+    const sourceIndex = state.items.findIndex((item) => item.id === sourceId); const targetIndex = state.items.findIndex((item) => item.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const next = [...state.items]; const [moved] = next.splice(sourceIndex, 1); next.splice(targetIndex, 0, moved);
+    change((current) => ({ ...current, items: next.map((item, index) => ({ ...item, order: index })) }));
+  }
+  function changePanel(panelId: PanelId, patch: Partial<{ visible: boolean; collapsed: boolean }>) {
+    change((current) => ({ ...current, preferences: { ...current.preferences, panels: { ...current.preferences.panels, [panelId]: { ...current.preferences.panels[panelId], ...patch } } } }));
+  }
+  function reorderPanels(sourceId: string, targetId: string) {
+    if (!state || sourceId === targetId || !panelIds.includes(sourceId as PanelId) || !panelIds.includes(targetId as PanelId)) return;
+    change((current) => {
+      const order = [...current.preferences.panelOrder];
+      const sourceIndex = order.indexOf(sourceId as PanelId); const targetIndex = order.indexOf(targetId as PanelId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const [moved] = order.splice(sourceIndex, 1); order.splice(targetIndex, 0, moved);
+      return { ...current, preferences: { ...current.preferences, panelOrder: order } };
     });
-  };
+  }
+  function setPreference<K extends keyof LibraryState["preferences"]>(key: K, value: LibraryState["preferences"][K]) { change((current) => ({ ...current, preferences: { ...current.preferences, [key]: value } })); }
 
-  // Add category dynamically
-  const handleAddCategory = async (name: string): Promise<string> => {
-    const trimmed = name.trim();
-    if (!trimmed) return "";
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const resources = Array.from(event.dataTransfer.files).map((file) => {
+      const target = window.launcher?.pathForFile(file) || "";
+      return { name: file.name.replace(/\.[^.]+$/, ""), target, kind: kindFromPath(target), tags: ["dropped"] } as ImportedResource;
+    }).filter((resource) => resource.target);
+    if (!resources.length) flash("Drag-and-drop requires the installed desktop application so the real file paths are available.");
+    else addResources(resources);
+  }
 
-    // Check if category already exists (case-insensitive)
-    const existing = categories.find(
-      (c) => c.name.toLowerCase() === trimmed.toLowerCase()
-    );
-    if (existing) {
-      return existing.name;
-    }
+  if (!state) return <div className="min-h-screen grid place-items-center text-sm text-neutral-500">Opening your library…</div>;
+  const selectedSet = selectedIds;
+  const visiblePanels = state.preferences.panelOrder.filter((panelId) => state.preferences.panels[panelId].visible);
+  const favourites = state.items.filter((item) => item.isFavourite).sort((a, b) => collator.compare(displayName(a), displayName(b)));
+  const recent = [...state.items].filter((item) => item.lastLaunchedAt).sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0)).slice(0, 8);
+  const focusItems = (state.preferences.focusGroupId === "all" ? state.items : state.preferences.focusGroupId === "none" ? [] : state.items.filter((item) => item.groupIds.includes(state.preferences.focusGroupId))).slice().sort((a, b) => collator.compare(displayName(a), displayName(b)));
+  const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.preferences.workspaceId) || state.workspaces[0];
+  const workspaceItems: Array<LibraryItem | WorkspaceResource> = activeWorkspace ? [...activeWorkspace.resources, ...activeWorkspace.itemIds.map((itemId) => state.items.find((item) => item.id === itemId)).filter(Boolean)] as Array<LibraryItem | WorkspaceResource> : [];
+  const workspaceOnly = visiblePanels.length === 1 && visiblePanels[0] === "workspaces";
 
-    const capitalized = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-    const newCategory: CategoryDoc = {
-      id: `cat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      name: capitalized,
-    };
-    const updated = [...categories, newCategory];
-    setCategories(updated);
-    localStorage.setItem("launcher_categories", JSON.stringify(updated));
-    return capitalized;
-  };
-
-  // Delete dynamic category
-  const handleDeleteCategory = async (categoryObj: CategoryDoc) => {
-    // Check if category is currently used by any shortcut
-    const isUsed = shortcuts.some((s) => s.category === categoryObj.name);
-    let confirmMsg = `Are you sure you want to delete the "${categoryObj.name}" category?`;
-    if (isUsed) {
-      confirmMsg = `The category "${categoryObj.name}" contains active shortcuts. Deleting this category will reassign these shortcuts to the "Others" category. Do you want to proceed?`;
-    }
-
-    if (confirm(confirmMsg)) {
-      // Ensure "Others" category exists if we are going to reassign shortcuts
-      let finalCategories = [...categories];
-      if (isUsed && categoryObj.name !== "Others") {
-        const hasOthers = categories.some((c) => c.name.toLowerCase() === "others");
-        if (!hasOthers) {
-          const newOthers: CategoryDoc = {
-            id: `cat-${Date.now()}-others`,
-            name: "Others",
-          };
-          finalCategories.push(newOthers);
-        }
-      }
-
-      // Reassign shortcuts if needed
-      let updatedShortcuts = [...shortcuts];
-      if (isUsed) {
-        updatedShortcuts = shortcuts.map((s) => {
-          if (s.category === categoryObj.name) {
-            return { ...s, category: "Others" };
-          }
-          return s;
-        });
-        setShortcuts(updatedShortcuts);
-        localStorage.setItem("launcher_shortcuts", JSON.stringify(updatedShortcuts));
-      }
-
-      const updatedCats = finalCategories.filter((c) => c.id !== categoryObj.id);
-      setCategories(updatedCats);
-      localStorage.setItem("launcher_categories", JSON.stringify(updatedCats));
-      if (selectedCategory === categoryObj.name) {
-        setSelectedCategory("All");
-      }
-    }
-  };
-
-  // Delete shortcut
-  const handleDeleteShortcut = async (id: string) => {
-    if (confirm("Are you sure you want to remove this shortcut from your launcher?")) {
-      const updated = shortcuts.filter((s) => s.id !== id);
-      setShortcuts(updated);
-      localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-    }
-  };
-
-  // Bulk import presets or scanned shortcuts
-  const handleImportPresets = async (presets: Omit<Shortcut, "id" | "createdAt">[]) => {
-    const newShortcuts = presets.map((preset, index) => ({
-      ...preset,
-      id: `sc-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
-      createdAt: Date.now(),
-    }));
-    const updated = [...newShortcuts, ...shortcuts].map((s, index) => ({
-      ...s,
-      order: index,
-    }));
-    setShortcuts(updated);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-  };
-
-  // Populate 21 Imaginary and Temporary Mock Shortcuts
-  const handlePopulateMockShortcuts = () => {
-    const mockData: Shortcut[] = [
-      {
-        id: "sc-mock-1",
-        name: "Gmail Inbox",
-        execPath: "https://mail.google.com",
-        category: "Office",
-        tags: ["email", "google", "workspace", "mock"],
-        description: "Quick access to your primary Gmail inbox and draft composer.",
-        iconUrl: "https://images.unsplash.com/photo-1557200134-90327ee9fafa?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 20,
-        order: 0
-      },
-      {
-        id: "sc-mock-2",
-        name: "Google Calendar",
-        execPath: "https://calendar.google.com",
-        category: "Office",
-        tags: ["schedule", "meetings", "calendar", "mock"],
-        description: "Unified schedule viewer with work and personal calendar layers.",
-        iconUrl: "https://images.unsplash.com/photo-1506784983877-45594efa4cbe?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 19,
-        order: 1
-      },
-      {
-        id: "sc-mock-3",
-        name: "Claude AI Assistant",
-        execPath: "https://claude.ai",
-        category: "AI",
-        tags: ["ai", "chat", "assistant", "mock"],
-        description: "Chat window for drafting communications and sorting lists.",
-        iconUrl: "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 18,
-        order: 2
-      },
-      {
-        id: "sc-mock-4",
-        name: "Deep Research Agent",
-        execPath: "https://ai.google.dev",
-        category: "AI",
-        tags: ["ai", "research", "agent", "mock"],
-        description: "Deep analysis agent for investigating news and generating reports.",
-        iconUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 17,
-        order: 3
-      },
-      {
-        id: "sc-mock-5",
-        name: "ChatGPT Pro",
-        execPath: "https://chatgpt.com",
-        category: "AI",
-        tags: ["ai", "chat", "gpt", "mock"],
-        description: "Quick access to GPT-4o for daily administrative tasks.",
-        iconUrl: "https://images.unsplash.com/photo-1677442136019-21780efad99a?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 16,
-        order: 4
-      },
-      {
-        id: "sc-mock-6",
-        name: "Gemini Advanced",
-        execPath: "https://gemini.google.com",
-        category: "AI",
-        tags: ["gemini", "google", "ai", "mock"],
-        description: "Google's premium assistant for workspace integration and analysis.",
-        iconUrl: "https://images.unsplash.com/photo-1614741118887-7a4ee193a5fa?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 15,
-        order: 5
-      },
-      {
-        id: "sc-mock-7",
-        name: "Obsidian Vault",
-        execPath: "obsidian://open?vault=personal",
-        category: "Research",
-        tags: ["notes", "markdown", "brain", "mock"],
-        description: "Local database of knowledge graphs and reference docs.",
-        iconUrl: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 14,
-        order: 6
-      },
-      {
-        id: "sc-mock-8",
-        name: "Zotero Library",
-        execPath: "zotero://select/items/0_ABCD1234",
-        category: "Research",
-        tags: ["citations", "pdf", "sources", "mock"],
-        description: "Scientific sources, PDFs, and bibliography organizer.",
-        iconUrl: "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 13,
-        order: 7
-      },
-      {
-        id: "sc-mock-9",
-        name: "Adobe Photoshop",
-        execPath: "C:\\Program Files\\Adobe\\Adobe Photoshop 2024\\Photoshop.exe",
-        category: "Photography",
-        tags: ["editing", "adobe", "photo", "mock"],
-        description: "Creative photo and asset editor.",
-        iconUrl: "https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 12,
-        order: 8
-      },
-      {
-        id: "sc-mock-10",
-        name: "Lightroom Classic",
-        execPath: "C:\\Program Files\\Adobe\\Adobe Lightroom Classic\\Lightroom.exe",
-        category: "Photography",
-        tags: ["raw", "photo", "grading", "mock"],
-        description: "Batch photo grader and RAW development suite.",
-        iconUrl: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 11,
-        order: 9
-      },
-      {
-        id: "sc-mock-11",
-        name: "Figma Canvas",
-        execPath: "figma://file/my-workspace-file",
-        category: "Photography",
-        tags: ["design", "ui", "ux", "mock"],
-        description: "Collaborative design environment for mockups and assets.",
-        iconUrl: "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 10,
-        order: 10
-      },
-      {
-        id: "sc-mock-12",
-        name: "Kindle Reader",
-        execPath: "kindle://book?action=open",
-        category: "Books",
-        tags: ["reading", "ebooks", "epub", "mock"],
-        description: "Desktop reader for manual uploads, tutorials, and ebooks.",
-        iconUrl: "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 9,
-        order: 11
-      },
-      {
-        id: "sc-mock-13",
-        name: "Calibre E-Book",
-        execPath: "C:\\Program Files\\Calibre2\\calibre.exe",
-        category: "Books",
-        tags: ["library", "epub", "convert", "mock"],
-        description: "Powerful desktop digital library manager.",
-        iconUrl: "https://images.unsplash.com/photo-1512820790803-83ca734da794?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 8,
-        order: 12
-      },
-      {
-        id: "sc-mock-14",
-        name: "Steam Launcher",
-        execPath: "steam://open/main",
-        category: "Gaming",
-        tags: ["games", "store", "launcher", "mock"],
-        description: "Primary gaming hub and community platform.",
-        iconUrl: "https://images.unsplash.com/photo-1612287230202-1bf1d85d1bdf?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 7,
-        order: 13
-      },
-      {
-        id: "sc-mock-15",
-        name: "Cyberpunk 2077",
-        execPath: "steam://rungameid/1091500",
-        category: "Gaming",
-        tags: ["rpg", "action", "sci-fi", "mock"],
-        description: "Immersive open-world action-adventure RPG.",
-        iconUrl: "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 6,
-        order: 14
-      },
-      {
-        id: "sc-mock-16",
-        name: "Notion Workspace",
-        execPath: "notion://notion.so/dashboard",
-        category: "Office",
-        tags: ["notes", "tasks", "wiki", "mock"],
-        description: "Unified team workspace for docs, tasks, and roadmaps.",
-        iconUrl: "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 5,
-        order: 15
-      },
-      {
-        id: "sc-mock-17",
-        name: "Spotify Web Player",
-        execPath: "spotify://open",
-        category: "Others",
-        tags: ["music", "audio", "player", "mock"],
-        description: "Background music companion for deep-focus sessions.",
-        iconUrl: "https://images.unsplash.com/photo-1614680376593-902f74fa0d41?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 4,
-        order: 16
-      },
-      {
-        id: "sc-mock-18",
-        name: "Slack",
-        execPath: "slack://open",
-        category: "Office",
-        tags: ["chat", "team", "communication", "mock"],
-        description: "Real-time communication and channels for workspace collaboration.",
-        iconUrl: "https://images.unsplash.com/photo-1563986768609-322da13575f3?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 3,
-        order: 17
-      },
-      {
-        id: "sc-mock-19",
-        name: "Midjourney Web",
-        execPath: "https://www.midjourney.com",
-        category: "AI",
-        tags: ["ai", "images", "art", "mock"],
-        description: "Generative AI art platform for asset design.",
-        iconUrl: "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 2,
-        order: 18
-      },
-      {
-        id: "sc-mock-20",
-        name: "Google Sheets",
-        execPath: "https://sheets.google.com",
-        category: "Office",
-        tags: ["sheets", "spreadsheet", "data", "mock"],
-        description: "Daily task tracker, budgets, and calculation sheets.",
-        iconUrl: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now() - 1000 * 60 * 1,
-        order: 19
-      },
-      {
-        id: "sc-mock-21",
-        name: "Zoom Scheduler",
-        execPath: "zoommtg://zoom.us/join",
-        category: "Office",
-        tags: ["meetings", "calls", "video", "mock"],
-        description: "Quick link to start or schedule administrative meetings.",
-        iconUrl: "https://images.unsplash.com/photo-1588196749597-9ff075ee6b5b?w=120&auto=format&fit=crop&q=60",
-        createdAt: Date.now(),
-        order: 20
-      }
-    ];
-
-    setShortcuts(mockData);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(mockData));
-
-    // Ensure default groups exist in state/localstorage too
-    const defaults = ["Office", "AI", "Research", "Photography", "Books", "Gaming", "Others"];
-    const baseCats = categories.length > 0 ? categories : defaults.map((name, i) => ({ id: `cat-${Date.now()}-${i}`, name }));
-    const finalCats = [...baseCats];
-    defaults.forEach((defName) => {
-      if (!finalCats.some(c => c.name.toLowerCase() === defName.toLowerCase())) {
-        finalCats.push({ id: `cat-added-${Math.random()}`, name: defName });
-      }
-    });
-    setCategories(finalCats);
-    localStorage.setItem("launcher_categories", JSON.stringify(finalCats));
-  };
-
-  const handleClearAllShortcuts = () => {
-    if (confirm("Are you sure you want to clear all shortcuts? This will reset the launcher to a fresh, blank state.")) {
-      setShortcuts([]);
-      localStorage.removeItem("launcher_shortcuts");
-    }
-  };
-
-  // Handle program launching
-  const handleLaunch = async (shortcut: Shortcut) => {
-    // Record launch timestamp
-    const updated = shortcuts.map((s) => {
-      if (s.id === shortcut.id) {
-        return { ...s, lastLaunchedAt: Date.now() };
-      }
-      return s;
-    });
-    setShortcuts(updated);
-    localStorage.setItem("launcher_shortcuts", JSON.stringify(updated));
-
-    setLaunchingShortcut(shortcut);
-    setLaunchStatus("connecting");
-    setLaunchError("");
-
-    try {
-      const response = await fetch("/api/launch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ execPath: shortcut.execPath }),
-      });
-
-      const result = await response.json();
-      if (response.ok && result.success) {
-        setLaunchStatus("success");
-        // Auto close success modal in 1.8 seconds
-        setTimeout(() => {
-          setLaunchingShortcut(null);
-        }, 1800);
-      } else {
-        // Fallback launched when running remotely on cloud or custom failure
-        setLaunchStatus("fallback");
-        if (result.error && !result.error.includes("Direct local launching")) {
-          setLaunchError(result.error);
-        }
-      }
-    } catch (err: any) {
-      console.error("Launch request failed:", err);
-      setLaunchStatus("fallback");
-    }
-  };
-
-  const copyLaunchCommand = (pathStr: string) => {
-    const cmd = `start "" "${pathStr}"`;
-    navigator.clipboard.writeText(cmd);
-    setCopiedCmd(true);
-    setTimeout(() => setCopiedCmd(false), 2000);
-  };
-
-  const downloadLaunchBat = (shortcut: Shortcut) => {
-    const content = `@echo off\nstart "" "${shortcut.execPath}"\nexit`;
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const safeName = shortcut.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
-    a.href = url;
-    a.download = `launch-${safeName}.bat`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // Get list of all unique tags to build a tag cloud or tag filters
-  const allTags = Array.from(
-    new Set(shortcuts.flatMap((s) => s.tags || []))
-  ).sort();
-
-  // Shortcuts sorted based on mode
-  const displayShortcuts = sortMode === "alphabetical"
-    ? [...shortcuts].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-    : sortMode === "date"
-    ? [...shortcuts].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-    : shortcuts;
-
-  // Filtered Shortcuts
-  const filteredShortcuts = displayShortcuts.filter((s) => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    const matchesCategory =
-      selectedCategory === "All" || s.category === selectedCategory;
-
-    return matchesSearch && matchesCategory;
-  });
-
-  const categoryNamesList = categories.map((c) => c.name);
-
-  const favoriteItems = displayShortcuts.filter((s) => s.isFavorite);
-  const nominatedItems = displayShortcuts.filter((s) => s.category === nominatedCategory);
-  const lastUsedItems = [...shortcuts]
-    .filter((s) => s.lastLaunchedAt !== undefined && s.lastLaunchedAt > 0)
-    .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
-    .slice(0, 4);
-
-  return (
-    <div
-      onDragOver={handleDragOver}
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className="min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-amber-500/20 selection:text-amber-400 relative overflow-hidden"
-    >
-      
-      {/* File Drag and Drop Overlay */}
-      <AnimatePresence>
-        {isDraggingFile && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/85 backdrop-blur-md p-6 text-center border-4 border-dashed border-amber-500/40 m-4 rounded-3xl pointer-events-none"
-          >
-            <div className="h-16 w-16 flex items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/30 mb-4 animate-bounce">
-              <Plus className="h-8 w-8" />
-            </div>
-            <h2 className="text-xl font-bold text-white tracking-tight">Drop your shortcut / exe files here!</h2>
-            <p className="text-sm text-neutral-400 mt-2 max-w-sm leading-relaxed">
-              Drop any local .exe, .lnk, or executable file to instantly catalog it in the selected group!
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Background radial ambient lights */}
-      <div className="absolute top-0 left-1/4 h-[500px] w-[500px] rounded-full bg-amber-500/5 blur-[120px] pointer-events-none" />
-      <div className="absolute top-1/3 right-1/4 h-[600px] w-[600px] rounded-full bg-orange-600/5 blur-[150px] pointer-events-none" />
-
-      {/* Main Container */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-16 relative z-10">
-        
-        {/* Navigation / Header */}
-        <header className="flex flex-col lg:flex-row lg:items-center lg:justify-between border-b border-neutral-800/80 pb-4 mb-4 gap-4 select-none" id="main-header">
-          <div className="group relative cursor-help flex items-center gap-2.5">
-            <div className="flex h-8.5 w-8.5 items-center justify-center rounded-lg bg-gradient-to-tr from-amber-500 to-orange-600 shadow-md shadow-amber-500/10">
-              <Play className="h-4 w-4 text-neutral-950 fill-neutral-950" />
-            </div>
-            <div>
-              <h1 className="font-display text-base font-bold tracking-tight text-white flex items-center gap-1.5">
-                App Launcher
-                <span className="text-[9px] text-neutral-500 font-normal px-1.5 py-0.2 bg-neutral-900 border border-neutral-800 rounded">Info</span>
-              </h1>
-              {/* Explanatory text appearing on hover */}
-              <div className="absolute top-full left-0 mt-2 w-80 p-3 bg-neutral-900/95 border border-neutral-800 rounded-xl shadow-2xl opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 z-50 text-[11px] text-neutral-400 leading-relaxed backdrop-blur-md">
-                A responsive, modular shopfront to catalog, organize, search, and launch your programs, shortcuts, and custom protocol links.
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Quick stats */}
-            <div className="hidden sm:flex items-center gap-3 bg-neutral-900/40 border border-neutral-800/80 rounded-lg px-3 py-1.5 text-[11px] text-neutral-400">
-              <div className="flex items-center gap-1">
-                <Laptop className="h-3 w-3 text-neutral-500" />
-                <span><strong className="text-white font-semibold">{shortcuts.length}</strong> Shortcuts</span>
-              </div>
-              <div className="h-3 w-[1px] bg-neutral-800" />
-              <div className="flex items-center gap-1">
-                <Layers className="h-3 w-3 text-neutral-500" />
-                <span><strong className="text-white font-semibold">{categories.length}</strong> Groups</span>
-              </div>
-            </div>
-
-            {/* Add Shortcut primary button */}
-            <button
-              onClick={() => {
-                setEditingShortcut(null);
-                setShowForm(true);
-              }}
-              className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-neutral-950 hover:bg-amber-400 active:scale-95 transition-all shadow-md shadow-amber-500/5"
-              id="btn-add-program"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Shortcut
-            </button>
-
-            {/* Folder scanner button */}
-            <button
-              onClick={() => setShowScanModal(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-[11px] font-semibold text-neutral-300 hover:bg-neutral-900 active:scale-95 transition-all shadow-md"
-              title="Scan and import all shortcuts from Windows folder"
-            >
-              <FolderPlus className="h-3.5 w-3.5 text-amber-400" />
-              Import folder
-            </button>
-
-            {/* Populate 21 Mocks button */}
-            <button
-              onClick={handlePopulateMockShortcuts}
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-400 hover:bg-amber-500 hover:text-neutral-950 active:scale-95 transition-all shadow-md shadow-amber-500/5"
-              title="Populate with 21 Imaginary Mock Shortcuts"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-              Populate 21 Mocks
-            </button>
-
-            {shortcuts.length > 0 && (
-              <button
-                onClick={handleClearAllShortcuts}
-                className="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-950/20 px-3 py-1.5 text-[11px] font-semibold text-red-400 hover:bg-red-600 hover:text-white active:scale-95 transition-all shadow-md"
-                title="Remove all shortcuts to start fresh"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear All
-              </button>
-            )}
-
-            {deferredPrompt && (
-              <button
-                onClick={handleInstallApp}
-                className="flex items-center gap-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-neutral-950 px-3 py-1.5 text-[11px] font-semibold active:scale-95 transition-all shadow-md shadow-emerald-500/10"
-                title="Install Launcher to your Desktop as a Standalone App"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Install App
-              </button>
-            )}
-          </div>
-        </header>
-
-        {/* Filters and Search Bar Row */}
-        <div className="flex flex-col xl:flex-row items-center xl:items-start justify-between gap-4 mb-4 select-none">
-          <div className="flex flex-col md:flex-row items-center gap-4 flex-1">
-            
-            {/* Horizontal Categories with Custom Add (Now side-by-side, width 500px, expands on hover) */}
-            <div 
-              onMouseEnter={() => setIsGroupsHovered(true)}
-              onMouseLeave={() => setIsGroupsHovered(false)}
-              className="relative flex flex-wrap items-center gap-1.5 p-1 border border-neutral-800/60 bg-neutral-950/20 rounded-xl transition-all duration-300 ease-in-out overflow-hidden"
-              style={{ 
-                width: "500px", 
-                maxHeight: isGroupsHovered ? "300px" : "40px" 
-              }}
-            >
-              <button
-                onClick={() => setSelectedCategory("All")}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border ${
-                  selectedCategory === "All"
-                    ? "border-amber-500/30 bg-amber-500/10 text-amber-400 font-bold"
-                    : "border-transparent bg-neutral-900/40 text-neutral-400 hover:text-white hover:bg-neutral-900/80"
-                }`}
-              >
-                All
-              </button>
-
-              {categories.map((cat) => (
-                <div key={cat.id} className="relative group shrink-0">
-                  <button
-                    onClick={() => setSelectedCategory(cat.name)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border ${
-                      selectedCategory === cat.name
-                        ? "border-amber-500/30 bg-amber-500/10 text-amber-400 font-bold"
-                        : "border-transparent bg-neutral-900/40 text-neutral-400 hover:text-white hover:bg-neutral-900/80"
-                    }`}
-                  >
-                    {cat.name}
-                  </button>
-                  
-                  {/* Delete button for any category */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteCategory(cat);
-                    }}
-                    className="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 focus:opacity-100 flex h-4 w-4 items-center justify-center rounded-full bg-red-600/90 text-white hover:bg-red-500 shadow-md transition-opacity duration-150"
-                    title={`Delete ${cat.name} category`}
-                  >
-                    <X className="h-2 w-2" />
-                  </button>
-                </div>
-              ))}
-
-              {/* Add category inline shortcut button */}
-              <button
-                onClick={() => {
-                  const newCat = prompt("Enter custom category name (e.g. Finance, Design):");
-                  if (newCat) {
-                    handleAddCategory(newCat);
-                  }
-                }}
-                className="px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border border-dashed border-neutral-800 text-neutral-500 hover:text-amber-400 hover:border-amber-500 bg-neutral-950/40 flex items-center gap-1 shrink-0"
-              >
-                <Plus className="h-3 w-3" />
-                Add Group
-              </button>
-            </div>
-
-            {/* Quick Tag Pills (Now side-by-side, width 500px, expands on hover) */}
-            <div 
-              onMouseEnter={() => setIsTagsHovered(true)}
-              onMouseLeave={() => setIsTagsHovered(false)}
-              className="relative flex flex-wrap items-center gap-1.5 p-1 border border-neutral-800/60 bg-neutral-950/20 rounded-xl transition-all duration-300 ease-in-out overflow-hidden"
-              style={{ 
-                width: "500px", 
-                maxHeight: isTagsHovered ? "300px" : "40px" 
-              }}
-            >
-              <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider mr-1.5 shrink-0 select-none pl-1">
-                Popular tags:
-              </span>
-              {allTags.length > 0 ? (
-                allTags.slice(0, 15).map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => setSearchQuery(tag)}
-                    className="inline-flex items-center gap-1 rounded-md bg-neutral-900/50 hover:bg-neutral-800/80 px-2 py-0.5 text-[11px] text-neutral-400 border border-neutral-800 transition-colors shrink-0"
-                  >
-                    <Tag className="h-2.5 w-2.5 text-neutral-600" />
-                    {tag}
-                  </button>
-                ))
-              ) : (
-                <span className="text-[11px] text-neutral-600 font-mono select-none">No tags yet</span>
-              )}
-            </div>
-
-          </div>
-
-          {/* Pin dropdown to nominate a category to the dashboard */}
-          <div className="relative shrink-0 flex items-center gap-1.5 bg-neutral-900/40 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 hover:border-neutral-750 transition-colors w-full xl:w-auto justify-between xl:justify-start h-[40px] self-start">
-            <div className="flex items-center gap-1.5">
-              <Bookmark className="h-3.5 w-3.5 text-amber-500 fill-amber-500/10" />
-              <span className="text-[10px] uppercase font-mono text-neutral-500 tracking-wider">PIN:</span>
-            </div>
-            <select
-              value={nominatedCategory}
-              onChange={(e) => {
-                setNominatedCategory(e.target.value);
-                localStorage.setItem("launcher_nominated_category", e.target.value);
-              }}
-              className="bg-transparent border-none text-xs text-neutral-200 focus:outline-none cursor-pointer hover:text-white font-semibold pr-1"
-              title="Select a category/group to pin/nominate to your dashboard"
-            >
-              {categoryNamesList.map((catName) => (
-                <option key={catName} value={catName} className="bg-neutral-950 text-neutral-200">
-                  {catName}
-                </option>
-              ))}
-            </select>
-          </div>
+  return <div className="min-h-screen bg-neutral-950 text-neutral-200" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
+    <main className="mx-auto max-w-[1500px] px-4 py-6 sm:px-7 lg:px-10">
+      <header className="mb-5 flex flex-col gap-4 border-b border-neutral-800 pb-5 lg:flex-row lg:items-center lg:justify-between">
+        <div><h1 className="flex items-center gap-2 text-lg font-semibold text-white"><AppWindow className="h-5 w-5 text-amber-400" />App Launcher</h1><p className="mt-1 text-xs text-neutral-500">Applications, files, folders and workspaces—kept locally.</p></div>
+        <div className="flex flex-wrap gap-2">
+          <button className="control primary" onClick={() => setEditor({ id: id("item"), name: "", target: "", kind: "app", arguments: [], primaryGroupId: groups[0]?.id || "", groupIds: [groups[0]?.id || ""], tags: [], createdAt: Date.now(), order: 0, isFavourite: false })}><Plus />Add item</button>
+          <button className="control" onClick={() => void chooseResource("app")}><FilePlus2 />Choose file/app</button>
+          <button className="control" onClick={() => void chooseResource("folder")}><FolderOpen />Choose folder</button>
+          <button className="control" onClick={() => setScanOpen(true)}><Search />Scan folder</button>
+          <button className="control" onClick={() => setManagePanels((current) => !current)}><Settings2 />Manage panels</button>
+          <button className="control" onClick={() => setCreditsOpen(true)}>Credits</button>
         </div>
+      </header>
+      {migrationWarning && <section className="mb-5 flex items-start gap-3 rounded-xl border border-amber-400/40 bg-amber-400/5 p-4 text-sm text-neutral-300"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" /><div><strong className="text-amber-300">No desktop library was found.</strong><p className="mt-1 text-xs leading-relaxed text-neutral-400">If this is an upgrade from the earlier localhost launcher, install and open the v1.1.0 migration build once before using this direct desktop version. New installations can ignore this notice.</p></div><button className="ml-auto text-xs text-neutral-400 hover:text-white" onClick={() => setMigrationWarning(false)}>Dismiss</button></section>}
+      {!state.preferences.onboardingDismissed && state.items.length === 0 && <section className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-amber-400/40 bg-amber-400/5 p-4 text-sm"><div className="mr-auto"><strong className="text-amber-300">Set up your library</strong><p className="mt-1 text-xs text-neutral-400">Optionally choose a folder or scan one now. You can skip this and do it later.</p></div><button className="control compact" onClick={() => void chooseResource("folder")}>Choose folder</button><button className="control compact" onClick={() => setScanOpen(true)}>Scan folder</button><button className="text-xs text-neutral-400 hover:text-white" onClick={() => setPreference("onboardingDismissed", true)}>Skip</button></section>}
 
-        {/* Loading Spinner */}
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <Loader2 className="h-8 w-8 animate-spin text-amber-500" />
-            <p className="text-xs text-neutral-500 font-mono">Syncing with launchpad database...</p>
-          </div>
-        ) : filteredShortcuts.length === 0 ? (
-          searchQuery || selectedCategory !== "All" ? (
-            /* Search results empty */
-            <div className="text-center py-16 border border-neutral-800/50 rounded-2xl bg-neutral-900/20 max-w-md mx-auto">
-              <HelpCircle className="h-8 w-8 text-neutral-600 mx-auto mb-3" />
-              <h3 className="text-sm font-semibold text-white mb-1">No matching programs found</h3>
-              <p className="text-xs text-neutral-400">
-                Try adjusting your search criteria or category filter, or add a new shortcut for this search.
-              </p>
-              <button
-                onClick={() => {
-                  setSearchQuery("");
-                  setSelectedCategory("All");
-                }}
-                className="mt-4 inline-flex text-xs text-amber-400 hover:underline font-medium"
-              >
-                Clear all filters
-              </button>
-            </div>
-          ) : (
-            /* Real empty state */
-            <EmptyState
-              onAddClick={() => {
-                setEditingShortcut(null);
-                setShowForm(true);
-              }}
-              onImportPresets={handleImportPresets}
-            />
-          )
-        ) : (
-          <div className="space-y-8" id="shortcuts-container">
-            {/* Custom Segmented Dashboard for All Categories & No Search Query */}
-            {selectedCategory === "All" && !searchQuery ? (
-              <>
-                {/* Side-by-Side Three Windows with Fine Pale Frames */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" id="dashboard-top-panels">
-                  
-                  {/* WINDOW 1: NOMINATED GROUP */}
-                  <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 flex flex-col gap-3 backdrop-blur-md shadow-sm" style={{ padding: "12px" }} id="panel-nominated">
-                    <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
-                      <div className="flex items-center gap-1.5">
-                        <Bookmark className="h-4 w-4 text-amber-500 fill-amber-500/10" />
-                        <h2 className="text-[11.5px] uppercase font-mono tracking-wider font-bold text-neutral-200">
-                          Nominated: <span className="text-amber-400 font-sans tracking-tight font-semibold">{nominatedCategory}</span>
-                        </h2>
-                      </div>
-                      <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
-                        {nominatedItems.length}
-                      </span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto max-h-[340px] scrollbar-thin scrollbar-thumb-neutral-800 pr-1">
-                      {nominatedItems.length > 0 ? (
-                        <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-2 gap-2" : "flex flex-col gap-1.5"}>
-                          {nominatedItems.map((shortcut) => (
-                            <ShortcutCard
-                              key={`nom-${shortcut.id}`}
-                              shortcut={shortcut}
-                              viewMode={viewMode}
-                              sortMode={sortMode}
-                              isCompact={true}
-                              onEdit={(item) => {
-                                setEditingShortcut(item);
-                                setShowForm(true);
-                              }}
-                              onDelete={handleDeleteShortcut}
-                              onLaunch={handleLaunch}
-                              onToggleFavorite={handleToggleFavorite}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center py-8">
-                          <Bookmark className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
-                          <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            No programs in <span className="text-neutral-400">{nominatedCategory}</span> yet. Choose another category above or add new items.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+      {managePanels && <section className="mb-4 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4"><div className="mb-3 flex items-center justify-between"><strong className="text-sm">Dashboard panels</strong><button className="text-xs text-neutral-400 hover:text-white" onClick={() => setManagePanels(false)}>Done</button></div><p className="mb-3 text-xs text-neutral-500">Drag a panel by its handle to choose its position.</p><div className="flex flex-wrap gap-3">{panelIds.map((panelId) => <label key={panelId} className="flex items-center gap-2 rounded-lg border border-neutral-800 px-3 py-2 text-xs"><input type="checkbox" checked={state.preferences.panels[panelId].visible} onChange={(event) => changePanel(panelId, { visible: event.target.checked })} />{panelTitles[panelId]}</label>)}</div></section>}
 
-                  {/* WINDOW 2: FAVOURITES */}
-                  <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 p-4 flex flex-col gap-3 backdrop-blur-md shadow-sm" id="panel-favourites">
-                    <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
-                      <div className="flex items-center gap-1.5">
-                        <Star className="h-4 w-4 text-amber-400 fill-amber-400" />
-                        <h2 className="text-[11.5px] uppercase font-mono tracking-wider font-bold text-neutral-200">
-                          Favourites
-                        </h2>
-                      </div>
-                      <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full font-mono font-bold">
-                        {favoriteItems.length}
-                      </span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto max-h-[340px] scrollbar-thin scrollbar-thumb-neutral-800 pr-1">
-                      {favoriteItems.length > 0 ? (
-                        <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-2 gap-2" : "flex flex-col gap-1.5"}>
-                          {favoriteItems.map((shortcut) => (
-                            <ShortcutCard
-                              key={`fav-${shortcut.id}`}
-                              shortcut={shortcut}
-                              viewMode={viewMode}
-                              sortMode={sortMode}
-                              isCompact={true}
-                              onEdit={(item) => {
-                                setEditingShortcut(item);
-                                setShowForm(true);
-                              }}
-                              onDelete={handleDeleteShortcut}
-                              onLaunch={handleLaunch}
-                              onToggleFavorite={handleToggleFavorite}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center py-8">
-                          <Star className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
-                          <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            No Favourites starred yet. Click the star icon on any card below to pin it here.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+      {visiblePanels.length > 0 && <section className="dashboard-panels mb-7 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+{visiblePanels.map((panelId) => panelId === "focus" ? <Panel key={panelId} title="Focus group" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels} actions={<select value={state.preferences.focusGroupId} onChange={(event) => setPreference("focusGroupId", event.target.value)} className="panel-select"><option value="none">None (hide)</option><option value="all">All items</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select>}><PreviewList items={focusItems} onLaunch={launch} collapsed={state.preferences.panels.focus.collapsed} empty="Choose a group or show all items." /></Panel> : panelId === "favourites" ? <Panel key={panelId} title="Favourites" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels}><PreviewList items={favourites} onLaunch={launch} collapsed={state.preferences.panels.favourites.collapsed} empty="Star items in the library to place them here." /></Panel> : panelId === "recent" ? <Panel key={panelId} title="Recent" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels}><PreviewList items={recent} onLaunch={launch} collapsed={state.preferences.panels.recent.collapsed} empty="Items you open will appear here." /></Panel> : <Panel key={panelId} title="Workspaces" panelId={panelId} state={state} onChange={changePanel} onReorder={reorderPanels} actions={<div className="flex items-center gap-1"><select value={activeWorkspace?.id || ""} onChange={(event) => { setWorkspaceDeleteArmed(false); setPreference("workspaceId", event.target.value); }} className="panel-select"><option value="">No workspace</option>{state.workspaces.slice().sort((a,b) => collator.compare(a.name,b.name)).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select><button className="icon-button" title="Create workspace" onClick={() => setNameDialog("workspace")}><Plus /></button><button className={workspaceDeleteArmed ? "icon-button danger text-red-300" : "icon-button danger"} title={workspaceDeleteArmed ? "Confirm delete workspace" : "Delete selected workspace"} onClick={deleteWorkspace}><Trash2 /></button></div>}><WorkspacePreview items={workspaceItems} onLaunch={launch} onAddFolder={() => void addDirectWorkspaceResource("folder")} onAddFile={() => void addDirectWorkspaceResource("file")} onVerify={() => void verifyWorkspace()} onRemove={removeWorkspaceEntry} onRelink={(id) => void relinkWorkspaceEntry(id)} brokenIds={brokenWorkspaceIds} collapsed={state.preferences.panels.workspaces.collapsed} /></Panel>)}
+      </section>}
 
-                  {/* WINDOW 3: LAST USED */}
-                  <div className="rounded-2xl border border-neutral-700/30 bg-neutral-950/15 p-4 flex flex-col gap-3 backdrop-blur-md shadow-sm" id="panel-lastused">
-                    <div className="flex items-center justify-between border-b border-neutral-800 pb-2 select-none">
-                      <div className="flex items-center gap-1.5">
-                        <Cpu className="h-4 w-4 text-amber-500/70" />
-                        <h2 className="text-[11.5px] uppercase font-mono tracking-wider font-bold text-neutral-200">
-                          Last Used
-                        </h2>
-                      </div>
-                      <span className="text-[10px] bg-neutral-900/80 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full font-mono font-semibold">
-                        {lastUsedItems.length}
-                      </span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto max-h-[340px] scrollbar-thin scrollbar-thumb-neutral-800 pr-1">
-                      {lastUsedItems.length > 0 ? (
-                        <div className={viewMode === "grid" ? "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-2 gap-2" : "flex flex-col gap-1.5"}>
-                          {lastUsedItems.map((shortcut) => (
-                            <ShortcutCard
-                              key={`rec-${shortcut.id}`}
-                              shortcut={shortcut}
-                              viewMode={viewMode}
-                              sortMode={sortMode}
-                              isCompact={true}
-                              onEdit={(item) => {
-                                setEditingShortcut(item);
-                                setShowForm(true);
-                              }}
-                              onDelete={handleDeleteShortcut}
-                              onLaunch={handleLaunch}
-                              onToggleFavorite={handleToggleFavorite}
-                            />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center py-8">
-                          <Cpu className="h-7 w-7 text-neutral-700 mb-2 stroke-[1.5]" />
-                          <p className="text-[10px] text-neutral-500 max-w-[200px] leading-relaxed">
-                            Programs you launch during this session will be listed here automatically.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                </div>
-
-                {/* Normal Arrangement of All Shortcuts (Supports Drag and Drop) */}
-                <motion.section
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, delay: 0.05 }}
-                  className="space-y-3"
-                  id="section-normal-layout"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-neutral-800/60 pb-2.5 gap-3 select-none">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-neutral-500" />
-                      <h2 className="text-xs uppercase font-mono tracking-wider font-bold text-neutral-300">
-                        Shortcuts
-                      </h2>
-                      <span className="text-[10px] bg-neutral-900 border border-neutral-800/60 text-neutral-400 px-1.5 py-0.5 rounded-full font-mono font-semibold">
-                        {displayShortcuts.length}
-                      </span>
-                      {sortMode === "manual" && (
-                        <span className="text-[9px] text-neutral-500 font-mono italic hidden xl:inline ml-1.5">
-                          (Drag and drop to reorder)
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* Search Input */}
-                      <div className="relative w-40 sm:w-48">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Search shortcuts..."
-                          className="w-full rounded-lg border border-neutral-800 bg-neutral-900/30 pl-8 pr-7 py-1 text-[11px] text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none transition-all"
-                          id="search-shortcuts"
-                        />
-                        {searchQuery && (
-                          <button
-                            onClick={() => setSearchQuery("")}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Sort Style */}
-                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSortMode("manual");
-                            localStorage.setItem("launcher_sort_mode", "manual");
-                          }}
-                          className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                            sortMode === "manual"
-                              ? "bg-amber-500 text-neutral-950 shadow-sm"
-                              : "text-neutral-400 hover:text-white"
-                          }`}
-                        >
-                          Manual
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSortMode("alphabetical");
-                            localStorage.setItem("launcher_sort_mode", "alphabetical");
-                          }}
-                          className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                            sortMode === "alphabetical"
-                              ? "bg-amber-500 text-neutral-950 shadow-sm"
-                              : "text-neutral-400 hover:text-white"
-                          }`}
-                        >
-                          <ArrowDownAZ className="h-2.5 w-2.5" />
-                          <span>A-Z</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSortMode("date");
-                            localStorage.setItem("launcher_sort_mode", "date");
-                          }}
-                          className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                            sortMode === "date"
-                              ? "bg-amber-500 text-neutral-950 shadow-sm"
-                              : "text-neutral-400 hover:text-white"
-                          }`}
-                          title="Arrange by Date Created"
-                        >
-                          Date
-                        </button>
-                      </div>
-
-                      {/* View Style */}
-                      <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setViewMode("grid");
-                            localStorage.setItem("launcher_view_mode", "grid");
-                          }}
-                          className={`p-1 rounded transition-all ${
-                            viewMode === "grid"
-                              ? "bg-amber-500 text-neutral-950 shadow-sm"
-                              : "text-neutral-400 hover:text-white"
-                          }`}
-                          title="Grid View"
-                        >
-                          <LayoutGrid className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setViewMode("list");
-                            localStorage.setItem("launcher_view_mode", "list");
-                          }}
-                          className={`p-1 rounded transition-all ${
-                            viewMode === "list"
-                              ? "bg-amber-500 text-neutral-950 shadow-sm"
-                              : "text-neutral-400 hover:text-white"
-                          }`}
-                          title="List View"
-                        >
-                          <List className="h-3 w-3" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
-                    <SortableContext
-                      items={displayShortcuts.map((s) => s.id)}
-                      strategy={rectSortingStrategy}
-                    >
-                      <div className={
-                        viewMode === "grid"
-                          ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"
-                          : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5"
-                      }>
-                        <AnimatePresence mode="popLayout">
-                          {displayShortcuts.map((shortcut) => (
-                            <ShortcutCard
-                              key={shortcut.id}
-                              shortcut={shortcut}
-                              viewMode={viewMode}
-                              sortMode={sortMode}
-                              onEdit={(item) => {
-                                setEditingShortcut(item);
-                                setShowForm(true);
-                              }}
-                              onDelete={handleDeleteShortcut}
-                              onLaunch={handleLaunch}
-                              onToggleFavorite={handleToggleFavorite}
-                            />
-                          ))}
-                        </AnimatePresence>
-                      </div>
-                    </SortableContext>
-                  </DndContext>
-                </motion.section>
-              </>
-            ) : (
-              /* Flat Grid for Specific Categories or Active Search */
-              <div className="space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-neutral-800/60 pb-2.5 gap-3 select-none">
-                  <div className="flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-neutral-500" />
-                    <h2 className="text-xs uppercase font-mono tracking-wider font-bold text-neutral-300">
-                      {searchQuery ? "Search Results" : `Shortcuts : ${selectedCategory}`}
-                    </h2>
-                    <span className="text-[10px] bg-neutral-900 border border-neutral-800/60 text-neutral-400 px-1.5 py-0.5 rounded-full font-mono font-semibold">
-                      {filteredShortcuts.length}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Search Input */}
-                    <div className="relative w-40 sm:w-48">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-neutral-500" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search shortcuts..."
-                        className="w-full rounded-lg border border-neutral-800 bg-neutral-900/30 pl-8 pr-7 py-1 text-[11px] text-white placeholder-neutral-500 focus:border-amber-500 focus:outline-none transition-all"
-                        id="search-shortcuts-flat"
-                      />
-                      {searchQuery && (
-                        <button
-                          onClick={() => setSearchQuery("")}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Sort Style */}
-                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5" title="Arrangement Style">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSortMode("manual");
-                          localStorage.setItem("launcher_sort_mode", "manual");
-                        }}
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                          sortMode === "manual"
-                            ? "bg-amber-500 text-neutral-950 shadow-sm"
-                            : "text-neutral-400 hover:text-white"
-                        }`}
-                      >
-                        Manual
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSortMode("alphabetical");
-                          localStorage.setItem("launcher_sort_mode", "alphabetical");
-                        }}
-                        className={`flex items-center gap-0.5 px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                          sortMode === "alphabetical"
-                            ? "bg-amber-500 text-neutral-950 shadow-sm"
-                            : "text-neutral-400 hover:text-white"
-                        }`}
-                      >
-                        <ArrowDownAZ className="h-2.5 w-2.5" />
-                        <span>A-Z</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSortMode("date");
-                          localStorage.setItem("launcher_sort_mode", "date");
-                        }}
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-tight uppercase transition-all ${
-                          sortMode === "date"
-                            ? "bg-amber-500 text-neutral-950 shadow-sm"
-                            : "text-neutral-400 hover:text-white"
-                        }`}
-                        title="Arrange by Date Created"
-                      >
-                        Date
-                      </button>
-                    </div>
-
-                    {/* View Style */}
-                    <div className="flex items-center rounded-lg border border-neutral-800 bg-neutral-900/30 p-0.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewMode("grid");
-                          localStorage.setItem("launcher_view_mode", "grid");
-                        }}
-                        className={`p-1 rounded transition-all ${
-                          viewMode === "grid"
-                            ? "bg-amber-500 text-neutral-950 shadow-sm"
-                            : "text-neutral-400 hover:text-white"
-                        }`}
-                        title="Grid View"
-                      >
-                        <LayoutGrid className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewMode("list");
-                          localStorage.setItem("launcher_view_mode", "list");
-                        }}
-                        className={`p-1 rounded transition-all ${
-                          viewMode === "list"
-                            ? "bg-amber-500 text-neutral-950 shadow-sm"
-                            : "text-neutral-400 hover:text-white"
-                        }`}
-                        title="List View"
-                      >
-                        <List className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
-                    items={filteredShortcuts.map((s) => s.id)}
-                    strategy={rectSortingStrategy}
-                  >
-                    <div className={
-                      viewMode === "grid"
-                        ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"
-                        : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5"
-                    }>
-                      <AnimatePresence mode="popLayout">
-                        {filteredShortcuts.map((shortcut) => (
-                          <ShortcutCard
-                            key={shortcut.id}
-                            shortcut={shortcut}
-                            viewMode={viewMode}
-                            sortMode={sortMode}
-                            onEdit={(item) => {
-                              setEditingShortcut(item);
-                              setShowForm(true);
-                            }}
-                            onDelete={handleDeleteShortcut}
-                            onLaunch={handleLaunch}
-                            onToggleFavorite={handleToggleFavorite}
-                          />
-                        ))}
-                      </AnimatePresence>
-                    </div>
-                  </SortableContext>
-                </DndContext>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Footer explaining desktop status */}
-        <div className="mt-20 border-t border-neutral-900 pt-8 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-neutral-500">
-          <div className="flex items-center gap-2.5">
-            <Cpu className="h-4 w-4 text-amber-500/80 animate-pulse" />
-            <span>
-              Standalone Desktop App Mode: <strong className="text-neutral-300">Enabled</strong> (Fully installable, runs offline instantly)
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1.5 bg-neutral-900 px-2.5 py-1 rounded-full border border-neutral-800">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-              100% Local Sandbox (Safe & Secure)
-            </span>
-          </div>
+      <section className="rounded-xl border border-neutral-800 bg-neutral-900/25 p-3 sm:p-4">
+        <div className="mb-4 flex flex-col gap-3 border-b border-neutral-800 pb-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="relative w-full xl:w-80"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search applications, files, folders or tags…" className="w-full rounded-lg border border-neutral-700 bg-neutral-950 py-2 pl-9 pr-3 text-sm outline-none focus:border-amber-400" /></div>
+          <div className="flex flex-wrap items-center gap-2"><span className="label">Layout</span><Segmented value={state.preferences.layout} onChange={(value) => setPreference("layout", value as LibraryLayout)} options={[["flat", "Flat"], ["purpose", "By purpose"], ["alpha", "A–Z"]]} /><span className="label ml-2">Sort</span><Segmented value={state.preferences.sortMode} onChange={(value) => setPreference("sortMode", value as SortMode)} options={[["manual", "Drag order"], ["alpha", "A–Z"], ["date", "Date"]]} /></div>
         </div>
+        <div className="mb-4 flex flex-wrap gap-1.5"><button className={`chip ${activeGroupId === "all" ? "active" : ""}`} onClick={() => setActiveGroupId("all")}>All</button>{groups.map((group) => <button key={group.id} className={`chip ${activeGroupId === group.id ? "active" : ""}`} onClick={() => setActiveGroupId(group.id)}>{group.name}</button>)}<button className="chip add" onClick={() => setNameDialog("group")}>+ Add group</button><button className="chip add" onClick={() => setLabelManagerOpen(true)}>Manage labels</button></div>
+        {allTags.length > 0 && <div className="mb-4 border-b border-neutral-800 pb-4"><button className="flex items-center gap-2 text-left" onClick={() => setTagsExpanded((value) => !value)}><span className="label">Tags</span><span className="text-xs text-neutral-500">{allTags.length}</span>{tagsExpanded ? <ChevronDown className="h-4 w-4 text-neutral-400" /> : <ChevronRight className="h-4 w-4 text-neutral-400" />}<span className="text-xs text-neutral-400">{tagsExpanded ? "Hide" : "Show"}</span></button>{tagsExpanded && <div className="mt-3 flex flex-wrap gap-1.5">{allTags.map((tag) => <button key={tag} className="tag-chip" onClick={() => setQuery(tag)}>{tag}</button>)}</div>}</div>}
 
-      </div>
-
-      {/* Forms Modal Overlay */}
-      <AnimatePresence>
-        {showForm && (
-          <ShortcutForm
-            initialShortcut={editingShortcut}
-            categories={categoryNamesList}
-            onAddCategory={handleAddCategory}
-            onDeleteCategory={(catName) => {
-              const catObj = categories.find((c) => c.name === catName);
-              if (catObj) {
-                handleDeleteCategory(catObj);
-              }
-            }}
-            onSave={handleSaveShortcut}
-            onClose={() => {
-              setShowForm(false);
-              setEditingShortcut(null);
-            }}
-            isEdit={editingShortcut !== null && shortcuts.some((s) => s.id === editingShortcut.id)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Folder Scan Modal Overlay */}
-      <AnimatePresence>
-        {showScanModal && (
-          <FolderScanModal
-            categories={categoryNamesList}
-            onImportShortcuts={handleImportPresets}
-            onClose={() => setShowScanModal(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Launching Overlay / Modal */}
-      <AnimatePresence>
-        {launchingShortcut && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900 p-6 shadow-2xl text-center"
-            >
-              {/* Close Button */}
-              <button
-                onClick={() => setLaunchingShortcut(null)}
-                className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800"
-              >
-                <X className="h-4 w-4" />
-              </button>
-
-              {launchStatus === "connecting" && (
-                <div className="space-y-4 py-4">
-                  <div className="relative h-12 w-12 mx-auto flex items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    <Loader2 className="h-6 w-6 animate-spin" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white">Launching program...</h3>
-                    <p className="text-xs text-neutral-400 mt-1">
-                      Attempting direct launch of <strong className="text-neutral-200">{launchingShortcut.name}</strong> on Windows.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {launchStatus === "success" && (
-                <div className="space-y-4 py-4">
-                  <div className="h-12 w-12 mx-auto flex items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                    <Check className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white">Launched Successfully!</h3>
-                    <p className="text-xs text-neutral-400 mt-1">
-                      Enjoy your session on <strong className="text-neutral-200">{launchingShortcut.name}</strong>.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {launchStatus === "fallback" && (
-                <div className="space-y-4">
-                  <div className="h-12 w-12 mx-auto flex items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    <Laptop className="h-5 w-5" />
-                  </div>
-                  <div className="text-left space-y-2">
-                    <h3 className="font-semibold text-white text-center mb-1">Local Bridge Required</h3>
-                    
-                    <p className="text-xs text-neutral-400 leading-normal">
-                      You are previewing this app in the AI Studio cloud sandbox. Direct local execution is restricted by web browsers for security.
-                    </p>
-                    
-                    {launchError && (
-                      <div className="p-2.5 rounded bg-red-950/20 border border-red-900/30 text-[11px] text-red-300 font-mono">
-                        {launchError}
-                      </div>
-                    )}
-
-                    <div className="bg-neutral-950 rounded-xl p-4 border border-neutral-800/60 space-y-3.5 mt-3">
-                      <div>
-                        <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider block mb-1">
-                          Option 1: Download 1-Click Launch Script
-                        </span>
-                        <button
-                          onClick={() => downloadLaunchBat(launchingShortcut)}
-                          className="flex items-center gap-1.5 w-full justify-center rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold py-1.5 text-neutral-200 transition-colors"
-                        >
-                          <Download className="h-3.5 w-3.5 text-amber-400" />
-                          Download batch file (.bat)
-                        </button>
-                      </div>
-
-                      <div className="border-t border-neutral-900 pt-3">
-                        <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider block mb-1">
-                          Option 2: Run Command Direct
-                        </span>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            readOnly
-                            value={`start "" "${launchingShortcut.execPath}"`}
-                            className="flex-1 font-mono text-[10px] bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-neutral-300"
-                          />
-                          <button
-                            onClick={() => copyLaunchCommand(launchingShortcut.execPath)}
-                            className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white border border-neutral-800"
-                            title="Copy launch command"
-                          >
-                            {copiedCmd ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {launchingShortcut.execPath.includes("://") && (
-                        <div className="border-t border-neutral-900 pt-3">
-                          <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-wider block mb-1">
-                            Option 3: Launch Native URI Protocol
-                          </span>
-                          <a
-                            href={launchingShortcut.execPath}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-1.5 w-full justify-center rounded-lg bg-amber-500 text-neutral-950 hover:bg-amber-400 text-xs font-semibold py-1.5 transition-all"
-                            onClick={() => setLaunchingShortcut(null)}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            Open via browser link
-                          </a>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="p-3 bg-neutral-900/40 border border-neutral-800/80 rounded-xl mt-4">
-                      <h4 className="text-[11px] font-bold text-white mb-0.5">💡 Direct Launching Tip:</h4>
-                      <p className="text-[10px] text-neutral-400 leading-normal">
-                        To enable direct 1-click launching, click the export/settings icon in AI Studio, download this project as a ZIP, open it on your PC, and run <code className="font-mono bg-neutral-950 px-1 py-0.5 rounded text-neutral-300">npm run dev</code>. The launch button will work automatically!
-                      </p>
-                    </div>
-
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
+        {selectedIds.size > 0 && <BulkBar selected={selectedIds.size} selectedItems={state.items.filter((item) => selectedIds.has(item.id))} groups={groups} workspaces={state.workspaces} hasCopiedMetadata={Boolean(copiedMetadata)} onCopyMetadata={copyMetadataFrom} onPasteMetadata={pasteMetadataToSelected} onClear={() => setSelectedIds(new Set())} onAddGroup={(identifier) => assignGroup(selectedIds, identifier)} onPrimary={(identifier) => assignGroup(selectedIds, identifier, true)} onFavourite={() => toggleFavourite(selectedIds, true)} onWorkspace={addSelectedToWorkspace} onDelete={() => deleteItems(selectedIds)} />}
+        <div className="mb-3 flex items-center justify-between text-xs text-neutral-500"><span>{displayItems.length} item{displayItems.length === 1 ? "" : "s"}</span><div className="flex gap-3"><button className="hover:text-white" onClick={selectVisible}>Select all</button><button className="hover:text-white" onClick={() => setSelectedIds(new Set())}>Deselect</button>{state.preferences.layout === "purpose" && activeGroupId === "all" && <><button className="hover:text-white" onClick={() => setCollapsedGroupIds(new Set(groups.map((group) => group.id)))}>Collapse all</button><button className="hover:text-white" onClick={() => setCollapsedGroupIds(new Set())}>Expand all</button></>}</div></div>
+        {state.preferences.layout === "purpose" && activeGroupId === "all" ? <PurposeLibrary groups={groups} collapsedGroupIds={collapsedGroupIds} onCollapsedChange={setCollapsedGroupIds} items={displayItems} selected={selectedSet} groupName={groupName} onSelect={toggleSelection} onLaunch={launch} onEdit={setEditor} onToggleFavourite={(item) => toggleFavourite(new Set([item.id]))} onDelete={(item) => deleteItems(new Set([item.id]))} onReorder={reorder} manual={state.preferences.sortMode === "manual"} /> : <ItemGrid items={displayItems} selected={selectedSet} groupName={groupName} onSelect={toggleSelection} onLaunch={launch} onEdit={setEditor} onToggleFavourite={(item) => toggleFavourite(new Set([item.id]))} onDelete={(item) => deleteItems(new Set([item.id]))} onReorder={reorder} manual={state.preferences.sortMode === "manual"} />}
+      </section>
+    </main>
+    {nameDialog && <NameDialog title={nameDialog === "group" ? "Add group" : "Create workspace"} label={nameDialog === "group" ? "Group name" : "Workspace name"} onClose={() => setNameDialog(null)} onSave={(name) => { if (nameDialog === "group") addGroup(name); else addWorkspace(name); setNameDialog(null); }} />}
+    {labelManagerOpen && <LabelManager groups={groups} tags={allTags} onClose={() => setLabelManagerOpen(false)} onDeleteGroup={deleteGroup} onMergeGroup={mergeGroup} onDeleteTag={deleteTag} onMergeTag={mergeTag} />}
+    {creditsOpen && <CreditsDialog onClose={() => setCreditsOpen(false)} />}
+    {editor && <ItemEditor item={editor} groups={groups} copiedMetadata={copiedMetadata} onCopyMetadata={(item) => setCopiedMetadata({ primaryGroupId: item.primaryGroupId, groupIds: item.groupIds, tags: item.tags })} onClose={() => setEditor(null)} onSave={(item) => { const existing = state.items.some((entry) => entry.id === item.id); if (existing) updateItem(item); else if (state.items.some((entry) => entry.kind === item.kind && cleanTarget(entry.target) === cleanTarget(item.target))) flash("A matching item already exists in the library."); else change((current) => ({ ...current, items: [{ ...item, order: 0 }, ...current.items].map((entry, index) => ({ ...entry, order: index })) })); setEditor(null); }} />}
+    {scanOpen && <ScanDialog onClose={() => setScanOpen(false)} onImport={(resources) => { addResources(resources); setScanOpen(false); }} />}
+    {notice && <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm shadow-2xl"><CircleAlert className="mr-2 inline h-4 w-4 text-amber-400" />{notice}</div>}
+  </div>;
 }
+
+function Segmented({ value, onChange, options }: { value: string; onChange(value: string): void; options: Array<[string, string]> }) { return <div className="flex rounded-lg border border-neutral-700 bg-neutral-950 p-0.5">{options.map(([key, label]) => <button key={key} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${value === key ? "bg-amber-400 text-black" : "text-neutral-400 hover:text-white"}`} onClick={() => onChange(key)}>{label}</button>)}</div>; }
+function Panel({ title, panelId, state, onChange, onReorder, actions, children }: { title: string; panelId: PanelId; state: LibraryState; onChange(panel: PanelId, patch: Partial<{ visible: boolean; collapsed: boolean }>): void; onReorder(source: string, target: string): void; actions?: React.ReactNode; children: React.ReactNode }) {
+  const preference = state.preferences.panels[panelId];
+  return <section draggable onDragStart={(event) => event.dataTransfer.setData("text/plain", panelId)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); onReorder(event.dataTransfer.getData("text/plain"), panelId); }} className={`min-h-0 rounded-xl border border-neutral-800 bg-neutral-900/35 p-3 ${panelId === "workspaces" ? "workspace-panel" : ""}`}><div className="flex min-h-7 items-center justify-between gap-2 border-b border-neutral-800 pb-2"><strong className="text-xs uppercase tracking-wide text-neutral-200">{title}</strong><div className="flex items-center gap-1"><span className="icon-button cursor-grab text-neutral-500" title="Drag to reorder"><GripVertical /></span>{actions}<button className="icon-button" title={preference.collapsed ? "Expand" : "Collapse"} onClick={() => onChange(panelId, { collapsed: !preference.collapsed })}>{preference.collapsed ? <ChevronRight /> : <ChevronDown />}</button><button className="icon-button" title="Hide panel" onClick={() => onChange(panelId, { visible: false })}><X /></button></div></div>{children}</section>;
+}
+function PreviewList({ items, onLaunch, collapsed, empty, showExtensions = false }: { items: Array<LibraryItem | WorkspaceResource>; onLaunch(item: LibraryItem | WorkspaceResource): void; collapsed: boolean; empty: string; showExtensions?: boolean }) {
+  if (collapsed) return <p className="pt-3 text-xs text-neutral-500">{items.length} item{items.length === 1 ? "" : "s"}</p>;
+  return <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">{items.length ? items.map((item) => <button key={item.id} title={item.target} onClick={() => void onLaunch(item)} className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left hover:bg-neutral-800"><ItemIcon item={item} compact /><span className="truncate text-xs font-medium text-neutral-200">{displayName(item, showExtensions)}</span></button>) : <p className="px-1 py-5 text-xs leading-relaxed text-neutral-500">{empty}</p>}</div>;
+}
+function WorkspacePreview({ items, onLaunch, onAddFolder, onAddFile, onVerify, onRemove, onRelink, brokenIds, collapsed }: { items: Array<LibraryItem | WorkspaceResource>; onLaunch(item: LibraryItem | WorkspaceResource): void; onAddFolder(): void; onAddFile(): void; onVerify(): void; onRemove(id: string): void; onRelink(id: string): void; brokenIds: Set<string>; collapsed: boolean }) {
+  const [sortMode, setSortMode] = useState<WorkspaceSortMode>("alpha");
+  const ordered = [...items].sort((a, b) => sortMode === "type" ? (collator.compare(workspaceType(a), workspaceType(b)) || collator.compare(displayName(a, true), displayName(b, true))) : collator.compare(displayName(a, true), displayName(b, true)));
+  const folders = ordered.filter((item) => item.kind === "folder"); const files = ordered.filter((item) => item.kind !== "folder");
+  return <div className="pt-3"><div className="flex flex-wrap items-center gap-2"><button className="control compact" onClick={onAddFolder}><FolderOpen />Add folder</button><button className="control compact" onClick={onAddFile}><FilePlus2 />Add file</button><button className="control compact" onClick={onVerify}>Verify workspace</button><label className="ml-auto flex items-center gap-2 text-[11px] text-neutral-500">Arrange <select value={sortMode} onChange={(event) => setSortMode(event.target.value as WorkspaceSortMode)} className="panel-select"><option value="alpha">A–Z</option><option value="type">By type</option></select></label></div>{collapsed ? <p className="pt-3 text-xs text-neutral-500">{items.length} item{items.length === 1 ? "" : "s"}</p> : <div className="workspace-two-column mt-3"><WorkspaceList title="Folders" items={folders} onLaunch={onLaunch} onRemove={onRemove} onRelink={onRelink} brokenIds={brokenIds} /><WorkspaceList title="Files" items={files} sortByType={sortMode === "type"} onLaunch={onLaunch} onRemove={onRemove} onRelink={onRelink} brokenIds={brokenIds} /></div>}</div>;
+}
+function workspaceType(item: LibraryItem | WorkspaceResource) { if (item.kind === "folder") return "Folder"; const extension = item.target.match(/\.([^.\\/]+)$/)?.[1]?.trim().toUpperCase(); return extension || (item.kind === "url" || item.kind === "protocol" ? "WEB LINK" : item.kind.toUpperCase()); }
+type WorkspaceIconSource = string | "txt" | "presentation";
+function workspaceIconSource(item: LibraryItem | WorkspaceResource): WorkspaceIconSource { const extension = item.target.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase() || ""; const descriptor = `${item.name} ${item.target}`.toLowerCase(); const webTarget = item.kind === "url" || item.kind === "protocol" || /^(https?:|www\.)/.test(item.target) || /^(com|net|org|html?|url)$/i.test(extension); if (extension === "gdoc" || /\bgoogle[ _-]?doc/.test(descriptor)) return googleDocIcon; if (/^(doc|docx|odt|rtf)$/i.test(extension) || /\b(word|msword)\b/.test(descriptor)) return wordIcon; if (/^(ppt|pptx|odp)$/i.test(extension) || /\b(powerpoint|presentation|slides)\b/.test(descriptor)) return "presentation"; if (/^(xls|xlsx|csv|ods)$/i.test(extension) || /\b(excel|spreadsheet)\b/.test(descriptor)) return spreadsheetIcon; if (extension === "pdf") return pdfIcon; if (/^(md|mdx|markdown)$/i.test(extension) || /\bmarkdown\b/.test(descriptor)) return markdownIcon; if (extension === "txt") return "txt"; if (/^(json|py)$/i.test(extension)) return jsonPyIcon; if (webTarget) return comIcon; if (/^(js|ts|tsx|css|yml|yaml|xml)$/i.test(extension) || /\b(code|script)\b/.test(descriptor)) return codeIcon; if (/^(png|jpe?g|gif|webp|svg|tiff?)$/i.test(extension) || /\b(image|photo|picture)\b/.test(descriptor)) return imageIcon; if (/^(mp3|wav|m4a|flac|ogg)$/i.test(extension) || /\b(audio|sound|music)\b/.test(descriptor)) return audioIcon; if (/^(mp4|mov|mkv|avi|webm|mpeg|mpg|mpe|movie)$/i.test(extension) || /\b(video|movie)\b/.test(descriptor)) return movieIcon; if (extension === "com") return comIcon; if (/^(exe|bat|cmd)$/i.test(extension)) return utilityIcon; if (extension === "lnk" || /\b(application|shortcut)\b/.test(descriptor)) return applicationIcon; return documentIcon; }
+function WorkspaceItemIcon({ item }: { item: LibraryItem | WorkspaceResource }) { if (item.kind === "folder") return <ItemIcon item={item} compact />; const source = workspaceIconSource(item); return <span className="grid h-6 w-6 place-items-center overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">{source === "txt" ? <span className="text-[7px] font-bold text-sky-300">TXT</span> : source === "presentation" ? <Presentation className="h-4 w-4 text-orange-300" /> : <img src={source} alt="" className="h-full w-full object-contain" />}</span>; }
+function WorkspaceList({ title, items, sortByType = false, onLaunch, onRemove, onRelink, brokenIds }: { title: string; items: Array<LibraryItem | WorkspaceResource>; sortByType?: boolean; onLaunch(item: LibraryItem | WorkspaceResource): void; onRemove(id: string): void; onRelink(id: string): void; brokenIds: Set<string> }) {
+  const row = (item: LibraryItem | WorkspaceResource) => <div key={item.id} className={`group flex items-center gap-2 rounded-md px-1 py-1.5 hover:bg-neutral-800 ${brokenIds.has(item.id) ? "bg-red-950/20" : ""}`}><button title={item.target} onClick={() => void onLaunch(item)} className="flex min-w-0 flex-1 items-center gap-2 text-left"><WorkspaceItemIcon item={item} /><span className="truncate text-xs font-medium text-neutral-200">{displayName(item, true)}</span></button>{brokenIds.has(item.id) && <span className="text-[10px] text-red-300">Missing</span>}<button className="icon-button opacity-70 group-hover:opacity-100" title="Relink" onClick={() => onRelink(item.id)}><FolderOpen /></button><button className="icon-button danger opacity-70 group-hover:opacity-100" title="Remove from workspace" onClick={() => onRemove(item.id)}><Trash2 /></button></div>;
+  const typeGroups = items.reduce<Record<string, Array<LibraryItem | WorkspaceResource>>>((groups, item) => { const type = workspaceType(item); (groups[type] ||= []).push(item); return groups; }, {});
+  return <section className="min-w-0"><h3 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-neutral-500">{title} · {items.length}</h3><div className="space-y-1">{items.length ? sortByType ? Object.entries(typeGroups).map(([type, grouped]) => <div key={type} className="mb-2"><h4 className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">{type}</h4>{grouped.map(row)}</div>) : items.map(row) : <p className="px-1 py-2 text-xs text-neutral-600">No {title.toLowerCase()}.</p>}</div></section>;
+}
+function PurposeLibrary(props: ItemGridProps & { groups: Group[]; collapsedGroupIds: Set<string>; onCollapsedChange(next: Set<string>): void }) { return <div className="space-y-5">{props.groups.map((group) => { const groupItems = props.items.filter((item) => item.primaryGroupId === group.id); const isCollapsed = props.collapsedGroupIds.has(group.id); return groupItems.length ? <section key={group.id}><button className="mb-2 flex w-full items-center gap-2 text-left" onClick={() => { const next = new Set(props.collapsedGroupIds); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); props.onCollapsedChange(next); }}><Layers3 className="h-3.5 w-3.5 text-amber-400" /><h2 className="text-xs font-bold uppercase tracking-wide text-neutral-300">{group.name}</h2><span className="text-[10px] text-neutral-500">{groupItems.length}</span>{isCollapsed ? <ChevronRight className="ml-1 h-4 w-4 text-neutral-400" /> : <ChevronDown className="ml-1 h-4 w-4 text-neutral-400" />}</button>{!isCollapsed && <ItemGrid {...props} items={groupItems} />}</section> : null; })}</div>; }
+type ItemGridProps = { items: LibraryItem[]; selected: Set<string>; groupName(id: string): string; onSelect(id: string): void; onLaunch(item: LibraryItem): void; onEdit(item: LibraryItem): void; onToggleFavourite(item: LibraryItem): void; onDelete(item: LibraryItem): void; onReorder(source: string, target: string): void; manual: boolean; };
+function ItemGrid({ items, selected, groupName, onSelect, onLaunch, onEdit, onToggleFavourite, onDelete, onReorder, manual }: ItemGridProps) { return <div className="grid grid-cols-1 gap-2 lg:grid-cols-2 2xl:grid-cols-3">{items.map((item) => <ItemCard key={item.id} item={item} selected={selected.has(item.id)} groupName={groupName} onSelect={onSelect} onLaunch={onLaunch} onEdit={onEdit} onToggleFavourite={onToggleFavourite} onDelete={onDelete} onReorder={onReorder} manual={manual} />)}{!items.length && <div className="rounded-lg border border-dashed border-neutral-800 px-4 py-10 text-center text-sm text-neutral-500">No items match this view.</div>}</div>; }
+function ItemCard({ item, selected, groupName, onSelect, onLaunch, onEdit, onToggleFavourite, onDelete, onReorder, manual }: { item: LibraryItem; selected: boolean; groupName(id: string): string; onSelect(id: string): void; onLaunch(item: LibraryItem): void; onEdit(item: LibraryItem): void; onToggleFavourite(item: LibraryItem): void; onDelete(item: LibraryItem): void; onReorder(source: string, target: string): void; manual: boolean; }) {
+  return <article draggable={manual} onDragStart={(event) => event.dataTransfer.setData("text/plain", item.id)} onDragOver={(event) => manual && event.preventDefault()} onDrop={(event) => { event.preventDefault(); onReorder(event.dataTransfer.getData("text/plain"), item.id); }} className={`group grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border p-3 ${selected ? "border-amber-400/70 bg-amber-400/5" : "border-neutral-800 bg-neutral-950/35 hover:border-neutral-700"}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} className="accent-amber-400" /><button onClick={() => void onLaunch(item)} className="shrink-0"><ItemIcon item={item} /></button><button onClick={() => void onLaunch(item)} className="min-w-0 text-left"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-sm font-semibold text-white">{item.name}</h3><span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-neutral-400">{groupName(item.primaryGroupId)}</span>{item.groupIds.length > 1 && <span className="text-[10px] font-semibold uppercase text-amber-400">{item.groupIds.length} groups</span>}</div><p className="mt-0.5 truncate text-xs text-neutral-500">{item.description || item.target}</p></button><div className="flex shrink-0 gap-1 opacity-70 transition group-hover:opacity-100"><button className="icon-button" title={item.isFavourite ? "Remove favourite" : "Add favourite"} onClick={() => onToggleFavourite(item)}><Star className={item.isFavourite ? "fill-amber-400 text-amber-400" : ""} /></button><button className="icon-button" title="Edit" onClick={() => onEdit(item)}><Settings2 /></button><button className="icon-button danger" title="Remove" onClick={() => onDelete(item)}><Trash2 /></button></div></article>;
+}
+function FallbackFileIcon({ item }: { item: LibraryItem | WorkspaceResource }) { const extension = item.target.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase() || ""; const iconClass = "h-4 w-4"; if (item.kind === "folder") return <Folder className={iconClass} />; if (/^(doc|docx|odt|rtf)$/i.test(extension)) return <FileText className={iconClass} />; if (/^(xls|xlsx|csv|ods)$/i.test(extension)) return <FileSpreadsheet className={iconClass} />; if (/^(ppt|pptx|odp)$/i.test(extension)) return <Presentation className={iconClass} />; if (/^(pdf)$/i.test(extension)) return <FileText className={iconClass} />; if (/^(png|jpe?g|gif|webp|svg|tiff?)$/i.test(extension)) return <FileImage className={iconClass} />; if (/^(mp3|wav|m4a|flac|ogg)$/i.test(extension)) return <FileAudio className={iconClass} />; if (/^(mp4|mov|mkv|avi|webm)$/i.test(extension)) return <FileVideo className={iconClass} />; if (/^(zip|rar|7z|tar|gz)$/i.test(extension)) return <FileArchive className={iconClass} />; if (/^(js|ts|tsx|py|json|md|html|css|yml|yaml)$/i.test(extension)) return <FileCode2 className={iconClass} />; return item.kind === "file" ? <File className={iconClass} /> : <Zap className={iconClass} />; }
+function ItemIcon({ item, compact = false }: { item: LibraryItem | WorkspaceResource; compact?: boolean }) { const [nativeSrc, setNativeSrc] = useState<string | null>(null); useEffect(() => { let live = true; const api = window.launcher; if (api) void api.getIcon(item.target).then((icon) => { if (live && icon?.dataUrl) setNativeSrc(icon.dataUrl); }); return () => { live = false; }; }, [item.target]); const src = nativeSrc || ("iconDataUrl" in item ? item.iconDataUrl : null) || null; const size = compact ? "h-6 w-6" : "h-10 w-10"; return <span className={`grid ${size} place-items-center overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900 text-amber-400`}>{src ? <img src={src} alt="" className="h-full w-full object-cover" /> : <FallbackFileIcon item={item} />}</span>; }
+function BulkBar({ selected, selectedItems, groups, workspaces, hasCopiedMetadata, onCopyMetadata, onPasteMetadata, onClear, onAddGroup, onPrimary, onFavourite, onWorkspace, onDelete }: { selected: number; selectedItems: LibraryItem[]; groups: Group[]; workspaces: Workspace[]; hasCopiedMetadata: boolean; onCopyMetadata(id: string): void; onPasteMetadata(): void; onClear(): void; onAddGroup(id: string): void; onPrimary(id: string): void; onFavourite(): void; onWorkspace(id: string): void; onDelete(): void; }) { return <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/5 p-2 text-xs"><strong className="text-amber-300">{selected} selected</strong><select defaultValue="" onChange={(event) => { if (event.target.value) { onCopyMetadata(event.target.value); event.currentTarget.value = ""; } }} className="bulk-select"><option value="">Copy labels/tags from…</option>{selectedItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="control compact" disabled={!hasCopiedMetadata} onClick={onPasteMetadata}>Paste labels & tags</button><select defaultValue="" onChange={(event) => { if (event.target.value) { onAddGroup(event.target.value); event.currentTarget.value = ""; } }} className="bulk-select"><option value="">Add to group…</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select defaultValue="" onChange={(event) => { if (event.target.value) { onPrimary(event.target.value); event.currentTarget.value = ""; } }} className="bulk-select"><option value="">Set primary purpose…</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select defaultValue="" onChange={(event) => { if (event.target.value) { onWorkspace(event.target.value); event.currentTarget.value = ""; } }} className="bulk-select"><option value="">Add to workspace…</option>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select><button className="control compact" onClick={onFavourite}><Star />Favourite</button><button className="control compact danger" onClick={onDelete}><Trash2 />Remove</button><button className="ml-auto text-neutral-400 hover:text-white" onClick={onClear}>Clear</button></div>; }
+function ItemEditor({ item, groups, copiedMetadata, onCopyMetadata, onClose, onSave }: { item: LibraryItem; groups: Group[]; copiedMetadata: Pick<LibraryItem, "primaryGroupId" | "groupIds" | "tags"> | null; onCopyMetadata(item: LibraryItem): void; onClose(): void; onSave(item: LibraryItem): void }) {
+  const [draft, setDraft] = useState(item); const isNew = !item.name && !item.target;
+  const toggleGroup = (identifier: string) => setDraft((current) => ({ ...current, groupIds: current.groupIds.includes(identifier) ? current.groupIds.filter((entry) => entry !== identifier) : [...current.groupIds, identifier] }));
+  const pasteMetadata = () => { if (copiedMetadata) setDraft((current) => ({ ...current, ...copiedMetadata, groupIds: copiedMetadata.groupIds.filter((id) => groups.some((group) => group.id === id)), primaryGroupId: groups.some((group) => group.id === copiedMetadata.primaryGroupId) ? copiedMetadata.primaryGroupId : current.primaryGroupId })); };
+  return <Modal title={isNew ? "Add item" : "Edit item"} onClose={onClose}><form className="space-y-3" onSubmit={(event: FormEvent) => { event.preventDefault(); if (!draft.name.trim() || !draft.target.trim()) return; const primary = draft.groupIds.includes(draft.primaryGroupId) ? draft.primaryGroupId : draft.groupIds[0] || groups[0]?.id; onSave({ ...draft, name: draft.name.trim(), target: draft.target.trim(), primaryGroupId: primary, tags: draft.tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean).sort(collator.compare) }); }}>
+    {!isNew && <div className="flex gap-2"><button type="button" className="control compact" onClick={() => onCopyMetadata(draft)}>Copy labels & tags</button><button type="button" className="control compact" disabled={!copiedMetadata} onClick={pasteMetadata}>Paste labels & tags</button></div>}
+    <Field label="Name"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required /></Field><Field label="Target path or URL"><input value={draft.target} onChange={(event) => setDraft({ ...draft, target: event.target.value })} required /></Field><div className="grid grid-cols-2 gap-3"><Field label="Type"><select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as ItemKind })}>{(["app", "folder", "file", "url", "protocol"] as ItemKind[]).map((kind) => <option key={kind} value={kind}>{kind}</option>)}</select></Field><Field label="Primary purpose"><select value={draft.primaryGroupId} onChange={(event) => setDraft({ ...draft, primaryGroupId: event.target.value, groupIds: [...new Set([...draft.groupIds, event.target.value])] })}>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></Field></div><Field label="Tags (comma separated)"><input value={draft.tags.join(", ")} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(",") })} /></Field><Field label="Description"><textarea value={draft.description || ""} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={2} /></Field><div><p className="mb-1 text-xs font-semibold text-neutral-300">Also in groups</p><div className="flex flex-wrap gap-2">{groups.map((group) => <label key={group.id} className="inline-flex items-center gap-1 rounded border border-neutral-700 px-2 py-1 text-xs"><input type="checkbox" checked={draft.groupIds.includes(group.id)} onChange={() => toggleGroup(group.id)} />{group.name}</label>)}</div></div><div className="flex justify-end gap-2 pt-2"><button type="button" className="control" onClick={onClose}>Cancel</button><button className="control primary" type="submit">Save</button></div></form></Modal>;
+}
+function LabelManager({ groups, tags, onClose, onDeleteGroup, onMergeGroup, onDeleteTag, onMergeTag }: { groups: Group[]; tags: string[]; onClose(): void; onDeleteGroup(id: string): void; onMergeGroup(source: string, target: string): void; onDeleteTag(tag: string): void; onMergeTag(source: string, target: string): void }) {
+  const [groupSource, setGroupSource] = useState(""); const [groupTarget, setGroupTarget] = useState(""); const [tagSource, setTagSource] = useState(""); const [tagTarget, setTagTarget] = useState("");
+  return <Modal title="Organise labels" onClose={onClose}><div className="space-y-6"><p className="text-xs leading-relaxed text-neutral-400">Delete removes a label from all shortcuts. Merge moves every shortcut using the source label to the destination label.</p><section><h3 className="mb-2 text-sm font-semibold">Groups</h3><div className="max-h-32 space-y-1 overflow-auto rounded border border-neutral-800 p-2">{groups.map((group) => <div key={group.id} className="flex items-center justify-between gap-2 text-xs"><span>{group.name}</span><button className="text-red-300 hover:text-red-200" onClick={() => onDeleteGroup(group.id)}>Delete</button></div>)}</div><div className="mt-2 grid grid-cols-2 gap-2"><select value={groupSource} onChange={(event) => setGroupSource(event.target.value)}><option value="">Merge this group…</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><select value={groupTarget} onChange={(event) => setGroupTarget(event.target.value)}><option value="">Into this group…</option>{groups.filter((group) => group.id !== groupSource).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div><button className="control compact mt-2" disabled={!groupSource || !groupTarget} onClick={() => { onMergeGroup(groupSource, groupTarget); setGroupSource(""); setGroupTarget(""); }}>Merge groups</button></section><section><h3 className="mb-2 text-sm font-semibold">Tags</h3><div className="max-h-32 space-y-1 overflow-auto rounded border border-neutral-800 p-2">{tags.map((tag) => <div key={tag} className="flex items-center justify-between gap-2 text-xs"><span>{tag}</span><button className="text-red-300 hover:text-red-200" onClick={() => onDeleteTag(tag)}>Delete</button></div>)}</div><div className="mt-2 grid grid-cols-2 gap-2"><select value={tagSource} onChange={(event) => setTagSource(event.target.value)}><option value="">Merge this tag…</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select><input value={tagTarget} onChange={(event) => setTagTarget(event.target.value)} placeholder="Destination tag" /></div><button className="control compact mt-2" disabled={!tagSource || !tagTarget.trim()} onClick={() => { onMergeTag(tagSource, tagTarget); setTagSource(""); setTagTarget(""); }}>Merge tags</button></section><div className="flex justify-end"><button className="control" onClick={onClose}>Done</button></div></div></Modal>;
+}
+function CreditsDialog({ onClose }: { onClose(): void }) { return <Modal title="Credits" onClose={onClose}><div className="space-y-3 text-sm leading-relaxed text-neutral-300"><p>Workspace file-type icons use selected open-licensed SVG vectors from SVG Repo. Folders and application shortcuts retain their existing icon behaviour.</p><p className="text-xs text-neutral-400">Source: SVG Repo — Search, explore, edit and share open-licensed SVG vectors. Individual assets may carry their own licence terms.</p><a className="text-sm text-amber-300 underline" href="https://www.svgrepo.com/" target="_blank" rel="noreferrer">svgrepo.com</a><div className="flex justify-end"><button className="control" onClick={onClose}>Done</button></div></div></Modal>; }
+function NameDialog({ title, label, onClose, onSave }: { title: string; label: string; onClose(): void; onSave(name: string): void }) { const [name, setName] = useState(""); return <Modal title={title} onClose={onClose}><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (name.trim()) onSave(name.trim()); }}><Field label={label}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder={title === "Create workspace" ? "For example, Thesis project" : "For example, Writing"} /></Field><div className="flex justify-end gap-2"><button type="button" className="control" onClick={onClose}>Cancel</button><button className="control primary" type="submit">Save</button></div></form></Modal>; }
+function ScanDialog({ onClose, onImport }: { onClose(): void; onImport(resources: ImportedResource[]): void }) { const [path, setPath] = useState("%USERPROFILE%\\Desktop"); const [items, setItems] = useState<ImportedResource[]>([]); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(false); async function scan(event: FormEvent) { event.preventDefault(); setLoading(true); setError(null); try { const resources = await window.launcher?.scanFolder(path); setItems(resources || []); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not scan this folder."); } finally { setLoading(false); } } return <Modal title="Scan folder" onClose={onClose}><form className="flex gap-2" onSubmit={scan}><input value={path} onChange={(event) => setPath(event.target.value)} className="min-w-0 flex-1" /><button className="control primary" disabled={loading}>{loading ? "Scanning…" : "Scan"}</button></form>{error && <p className="mt-3 text-xs text-red-300">{error}</p>}{items.length > 0 && <div className="mt-4"><p className="mb-2 text-xs text-neutral-400">{items.length} eligible resources found. Existing matching targets will be skipped.</p><div className="max-h-64 space-y-1 overflow-auto rounded border border-neutral-800 p-2">{items.map((item) => <div key={`${item.target}:${item.name}`} className="flex gap-2 text-xs"><span className="text-amber-400">{item.kind}</span><span className="truncate">{item.name}</span></div>)}</div><div className="mt-3 flex justify-end gap-2"><button className="control" onClick={onClose}>Cancel</button><button className="control primary" onClick={() => onImport(items)}>Import {items.length}</button></div></div>}</Modal>; }
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose(): void }) { return <div className="fixed inset-0 z-40 grid place-items-center bg-black/70 p-4"><section className="w-full max-w-xl rounded-xl border border-neutral-700 bg-neutral-900 p-5 shadow-2xl"><div className="mb-4 flex items-center justify-between"><h2 className="font-semibold text-white">{title}</h2><button className="icon-button" onClick={onClose}><X /></button></div>{children}</section></div>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block text-xs font-semibold text-neutral-300"><span className="mb-1 block">{label}</span>{children}</label>; }
