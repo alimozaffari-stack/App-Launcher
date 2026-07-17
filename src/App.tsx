@@ -199,10 +199,16 @@ export default function App() {
   function pasteMetadataToSelected() { if (!copiedMetadata || !selectedIds.size) return; change((current) => ({ ...current, items: current.items.map((item) => !selectedIds.has(item.id) ? item : { ...item, primaryGroupId: copiedMetadata.primaryGroupId, groupIds: copiedMetadata.groupIds.filter((id) => current.groups.some((group) => group.id === id)), tags: copiedMetadata.tags }) })); flash(`Pasted labels and tags to ${selectedIds.size} selected item${selectedIds.size === 1 ? "" : "s"}.`); }
   async function addDirectWorkspaceResource(kind: "folder" | "file") {
     if (!activeWorkspace) { flash("Create or select a workspace first."); return; }
-    const resource = await window.launcher?.chooseResource(kind);
-    if (!resource) return;
-    const entry: WorkspaceResource = { id: id("workspace-resource"), name: resource.name || "Untitled resource", target: resource.target, kind: resource.kind, arguments: resource.arguments || [], workingDirectory: resource.workingDirectory, description: resource.description };
-    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => workspace.id !== activeWorkspace.id ? workspace : { ...workspace, resources: [...workspace.resources, entry] }) }));
+    const resources = await window.launcher?.chooseResources(kind) || [];
+    if (!resources.length) return;
+    const entries = resources.map((resource) => ({ id: id("workspace-resource"), name: resource.name || "Untitled resource", target: resource.target, kind: resource.kind, arguments: resource.arguments || [], workingDirectory: resource.workingDirectory, description: resource.description } satisfies WorkspaceResource));
+    change((current) => ({ ...current, workspaces: current.workspaces.map((workspace) => {
+      if (workspace.id !== activeWorkspace.id) return workspace;
+      const existingTargets = new Set(workspace.resources.map((resource) => cleanTarget(resource.target)));
+      const additions = entries.filter((entry) => !existingTargets.has(cleanTarget(entry.target)));
+      return { ...workspace, resources: [...workspace.resources, ...additions] };
+    }) }));
+    flash(`${entries.length} ${kind}${entries.length === 1 ? "" : "s"} added to the workspace.`);
   }
   function removeWorkspaceEntry(itemId: string) {
     if (!activeWorkspace) return;
