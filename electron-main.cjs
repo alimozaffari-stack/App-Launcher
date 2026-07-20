@@ -26,7 +26,7 @@ function parseWindowsArguments(value) {
   return result;
 }
 function iconKey(target) {
-  return crypto.createHash("sha256").update(path.resolve(expandEnvironment(target))).digest("hex");
+  return crypto.createHash("sha256").update(target).digest("hex");
 }
 async function readState() {
   try { return JSON.parse(await fs.readFile(statePath(), "utf8")); } catch { return null; }
@@ -39,20 +39,45 @@ async function writeState(state) {
   await fs.rename(temporary, destination);
   return true;
 }
+function iconPathFromLocation(iconLocation) {
+  if (typeof iconLocation !== "string" || !iconLocation.trim()) return null;
+  // Windows shortcut icon locations commonly look like "C:\\Program Files\\App\\app.exe,0".
+  // Keep the final path component intact if an uncommon path happens to contain a comma.
+  const match = iconLocation.trim().match(/^(.*?)(?:,\s*-?\d+)?$/);
+  const candidate = (match?.[1] || iconLocation).trim().replace(/^"|"$/g, "");
+  return candidate || null;
+}
+async function iconCandidates(target) {
+  const expanded = expandEnvironment(target);
+  const candidates = [expanded];
+  if (/\.lnk$/i.test(expanded)) {
+    const shortcut = await resolveWindowsShortcut(expanded);
+    const location = iconPathFromLocation(shortcut?.iconLocation);
+    if (location) candidates.push(expandEnvironment(location));
+    if (shortcut?.target) candidates.push(expandEnvironment(shortcut.target));
+  }
+  return [...new Set(candidates.filter((candidate) => fssync.existsSync(candidate)))];
+}
 async function getIcon(target) {
   if (!target || /^(https?:|[a-z][a-z0-9+.-]*:)/i.test(target)) return null;
-  const expanded = expandEnvironment(target);
-  if (!fssync.existsSync(expanded)) return null;
-  const key = iconKey(expanded);
+  const candidates = await iconCandidates(target);
+  if (!candidates.length) return null;
+  const key = iconKey(candidates.join("\0"));
   const filename = path.join(iconDirectory(), `${key}.png`);
   try { return { key, dataUrl: `data:image/png;base64,${(await fs.readFile(filename)).toString("base64")}` }; } catch {}
   try {
     await fs.mkdir(iconDirectory(), { recursive: true });
-    const image = await app.getFileIcon(expanded, { size: "normal" });
-    const png = image.resize({ width: 256, height: 256, quality: "best" }).toPNG();
-    await fs.writeFile(filename, png);
-    return { key, dataUrl: `data:image/png;base64,${png.toString("base64")}` };
+    for (const candidate of candidates) {
+      try {
+        const image = await app.getFileIcon(candidate, { size: "normal" });
+        if (image.isEmpty()) continue;
+        const png = image.resize({ width: 256, height: 256, quality: "best" }).toPNG();
+        await fs.writeFile(filename, png);
+        return { key, dataUrl: `data:image/png;base64,${png.toString("base64")}` };
+      } catch { /* Try the next shortcut icon source. */ }
+    }
   } catch { return null; }
+  return null;
 }
 async function resolveWindowsShortcut(filePath) {
   if (process.platform !== "win32") return null;
@@ -83,7 +108,7 @@ async function scanFolder(folderPath) {
     if ([".exe", ".bat", ".cmd", ".lnk", ".url"].includes(extension)) {
       if (extension === ".lnk") {
         const shortcut = await resolveWindowsShortcut(fullPath);
-        results.push({ name: path.basename(entry.name, extension), target: shortcut?.target || fullPath, kind: "app", arguments: shortcut?.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut?.workingDirectory || undefined, description: shortcut?.description || undefined, tags: ["shortcut"] });
+        results.push({ name: path.basename(entry.name, extension), target: shortcut?.target || fullPath, kind: "app", arguments: shortcut?.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut?.workingDirectory || undefined, description: shortcut?.description || undefined, iconSource: fullPath, tags: ["shortcut"] });
       } else if (extension === ".url") {
         const content = await fs.readFile(fullPath, "utf8").catch(() => "");
         const target = content.match(/^URL=(.+)$/mi)?.[1]?.trim() || fullPath;
@@ -136,7 +161,7 @@ function registerIpc() {
     if (kind === "folder") return { target, kind: "folder", name: path.basename(target) };
     if (/\.lnk$/i.test(target)) {
       const shortcut = await resolveWindowsShortcut(target);
-      if (shortcut?.target) return { target: shortcut.target, kind: inferKind(shortcut.target), name: path.basename(target, path.extname(target)), arguments: shortcut.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut.workingDirectory || undefined, description: shortcut.description || undefined };
+      if (shortcut?.target) return { target: shortcut.target, kind: inferKind(shortcut.target), name: path.basename(target, path.extname(target)), arguments: shortcut.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut.workingDirectory || undefined, description: shortcut.description || undefined, iconSource: target };
     }
     return { target, kind: "file", name: path.basename(target, path.extname(target)) };
   };
