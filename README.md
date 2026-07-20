@@ -1,8 +1,16 @@
-# App Launcher — Direct Desktop Build (v1.3.0)
+# App Launcher — Organise your Windows working environment
 
-An offline-first Electron library for applications, folders, files, URLs and named workspaces.
+App Launcher is an offline-first Windows desktop library for applications, folders, files, URLs and named workspaces.
 
-This final desktop build loads its packaged interface directly through Electron. It contains no Express server, no localhost service and no external backend.
+## Why App Launcher?
+
+App Launcher provides a single, private desktop workspace for applications, folders, documents and web resources that would otherwise be scattered across the Windows Start menu, File Explorer, desktop shortcuts and browser bookmarks.
+
+It is designed for project-based and research-intensive work. Resources can be organised by purpose, grouped into named workspaces, pinned for current tasks and reopened without moving or altering the original files. This reduces repeated searching and makes complex working environments easier to navigate.
+
+The application works locally and offline. Its library, workspace structure and organisational data remain on the user’s computer rather than depending on an account, cloud service or external backend.
+
+This desktop build loads its packaged interface directly through Electron. It contains no Express server, no localhost service and no external backend.
 
 ## Interface at a glance
 
