@@ -18,6 +18,7 @@ export interface LibraryItem {
   tags: string[];
   iconKey?: string;
   iconDataUrl?: string;
+  iconSource?: string;
   createdAt: number;
   order: number;
   isFavourite: boolean;
@@ -31,6 +32,7 @@ export interface WorkspaceResource {
   arguments: string[];
   workingDirectory?: string;
   description?: string;
+  iconSource?: string;
 }
 export interface Workspace { id: string; name: string; itemIds: string[]; resources: WorkspaceResource[]; }
 export interface PanelPreference { visible: boolean; collapsed: boolean; }
@@ -57,6 +59,7 @@ export interface ImportedResource {
   arguments?: string[];
   workingDirectory?: string;
   description?: string;
+  iconSource?: string;
   tags?: string[];
 }
 
