@@ -20,6 +20,10 @@ This desktop build loads its packaged interface directly through Electron. It co
 
 Workspaces keep folders on the left and working files on the right, while the lower panels provide Favourites, a selected Focus group, and Recent items.
 
+### Distinguishing working folders
+
+When two working folders share a name, App Launcher shows a muted location cue beneath each folder name: the drive or root and its nearest parent folders, for example `G:\\…\\Heritage and Civilisation\\Readings`. The complete path remains available on hover and is still the path that opens; the cue is only a visual aid for choosing the correct folder.
+
 ### Working folders and files
 
 ![Workspace folder and file columns](docs/screenshots/workspace-detail.svg)
@@ -83,6 +87,7 @@ If you previously used an internal or localhost-based pre-release and its librar
 - Workspace entries can be verified, relinked, or removed without touching the underlying file or folder.
 - Workspaces takes the full dashboard width by default, supports vertical resizing, and grouped library sections support Collapse all / Expand all.
 - Workspace-only Add folder and Add file support selecting multiple folders or files at once.
+- Workspace folders show a concise parent-path cue, so folders with the same name from different drives or projects can be distinguished before opening.
 - Folder scanning uses actual local paths, and matching targets are not imported twice.
 - The Electron bridge handles local opening, scanning, persistence and icon caching; the renderer does not have direct Node access.
 
