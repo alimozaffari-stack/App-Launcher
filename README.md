@@ -28,7 +28,7 @@ When two working folders share a name, App Launcher shows a muted location cue b
 
 ![Workspace folder and file columns](docs/screenshots/workspace-detail.svg)
 
-Add, verify, relink and remove working folders or files without changing the originals.
+Add, verify, relink and remove working folders or files without changing the originals. Folders and files provide independent presentation sorting controls (A–Z, By type, Date added newest, and Date added oldest).
 
 ### Import and organisation
 
@@ -82,13 +82,16 @@ If you previously used an internal or localhost-based pre-release and its librar
 - Workspace-only folders and files can be added directly from the Workspaces panel without appearing in the general library.
 - Groups and tags can be deleted or merged, and shortcut labels/tags can be copied and pasted through the edit dialog.
 - Workspace filenames retain their extensions; selected shortcuts support bulk copying and pasting of labels and tags.
-- First launch offers an optional folder scan; Workspaces support A–Z/type arrangement, file-type fallbacks, and a full-width two-column view when other dashboard panels are hidden.
+- First launch offers an optional folder scan; Workspaces provide independent column presentation sorting for folders and files (A–Z, By type, Date added newest, and Date added oldest), file-type fallbacks, and a full-width two-column view when other dashboard panels are hidden.
+- Direct workspace resources record an in-app timestamp when newly added, while older entries without timestamps sort stably after dated items; dates represent in-app record timestamps rather than filesystem modification times.
 - Workspace-only file type icons include selected vectors sourced from [SVG Repo](https://www.svgrepo.com/); see the in-app Credits entry and SVG Repo's individual asset licences.
 - Workspace entries can be verified, relinked, or removed without touching the underlying file or folder.
 - Workspaces takes the full dashboard width by default, supports vertical resizing, and grouped library sections support Collapse all / Expand all.
 - Workspace-only Add folder and Add file support selecting multiple folders or files at once.
 - Workspace folders show a concise parent-path cue, so folders with the same name from different drives or projects can be distinguished before opening.
 - Folder scanning uses actual local paths, and matching targets are not imported twice.
+- The desktop window supports a compact resizable floor down to 420 × 480 px.
+- The desktop application and installer package with a dedicated application icon for consistent executable, window, and taskbar identity.
 - The Electron bridge handles local opening, scanning, persistence and icon caching; the renderer does not have direct Node access.
 
 ## Development checks
