@@ -139,7 +139,8 @@ async function openItem(item) {
 }
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1320, height: 880, minWidth: 900, minHeight: 640, title: "App Launcher", backgroundColor: "#050505", show: false,
+    width: 1320, height: 880, minWidth: 420, minHeight: 480, title: "App Launcher", backgroundColor: "#050505", show: false,
+    icon: path.join(__dirname, "build", "icon.ico"),
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, "preload.cjs") }
   });
   mainWindow.setMenuBarVisibility(false);

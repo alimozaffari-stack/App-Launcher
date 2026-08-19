@@ -1,5 +1,7 @@
 node_modules/
-build/
+build/*
+!build/app-icon-master.png
+!build/icon.ico
 dist/
 dist-desktop/
 coverage/
