@@ -24,9 +24,7 @@ jobs:
 
       - name: Install dependencies
         shell: pwsh
-        run: |
-          Remove-Item package-lock.json -Force -ErrorAction SilentlyContinue
-          npm install
+        run: npm ci
 
       - name: Build Windows installer
         run: npm run desktop:build -- --publish never

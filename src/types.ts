@@ -2,6 +2,11 @@ export type ItemKind = "app" | "folder" | "file" | "url" | "protocol";
 export type SortMode = "manual" | "alpha" | "date";
 export type LibraryLayout = "flat" | "purpose" | "alpha";
 export type WorkspaceSortMode = "alpha" | "type";
+export type WorkspaceColumnSortMode =
+  | "alpha"
+  | "type"
+  | "date-newest"
+  | "date-oldest";
 export type PanelId = "focus" | "favourites" | "recent" | "workspaces";
 
 export interface Group { id: string; name: string; }
@@ -18,6 +23,7 @@ export interface LibraryItem {
   tags: string[];
   iconKey?: string;
   iconDataUrl?: string;
+  iconSource?: string;
   createdAt: number;
   order: number;
   isFavourite: boolean;
@@ -31,6 +37,8 @@ export interface WorkspaceResource {
   arguments: string[];
   workingDirectory?: string;
   description?: string;
+  iconSource?: string;
+  addedAt?: number;
 }
 export interface Workspace { id: string; name: string; itemIds: string[]; resources: WorkspaceResource[]; }
 export interface PanelPreference { visible: boolean; collapsed: boolean; }
@@ -57,6 +65,7 @@ export interface ImportedResource {
   arguments?: string[];
   workingDirectory?: string;
   description?: string;
+  iconSource?: string;
   tags?: string[];
 }
 
