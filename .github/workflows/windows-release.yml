@@ -14,10 +14,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -35,7 +35,7 @@ jobs:
         run: '"value=$((Get-Content package.json -Raw | ConvertFrom-Json).version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
 
       - name: Publish downloadable Windows release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.value }}
           name: App Launcher v${{ steps.version.outputs.value }}
