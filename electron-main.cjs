@@ -28,16 +28,27 @@ function parseWindowsArguments(value) {
 function iconKey(target) {
   return crypto.createHash("sha256").update(target).digest("hex");
 }
+function isProtocolTarget(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (/^[a-z]:([\\/]|$)/i.test(trimmed)) return false;
+  return /^[a-z][a-z0-9+.-]+:/i.test(trimmed);
+}
 async function readState() {
   try { return JSON.parse(await fs.readFile(statePath(), "utf8")); } catch { return null; }
 }
-async function writeState(state) {
-  const destination = statePath();
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
-  await fs.rename(temporary, destination);
-  return true;
+let writeQueue = Promise.resolve();
+function writeState(state) {
+  const task = writeQueue.then(async () => {
+    const destination = statePath();
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    const temporary = `${destination}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(state, null, 2), "utf8");
+    await fs.rename(temporary, destination);
+    return true;
+  });
+  writeQueue = task.catch(() => {});
+  return task;
 }
 function iconPathFromLocation(iconLocation) {
   if (typeof iconLocation !== "string" || !iconLocation.trim()) return null;
@@ -59,7 +70,7 @@ async function iconCandidates(target) {
   return [...new Set(candidates.filter((candidate) => fssync.existsSync(candidate)))];
 }
 async function getIcon(target) {
-  if (!target || /^(https?:|[a-z][a-z0-9+.-]*:)/i.test(target)) return null;
+  if (!target || isProtocolTarget(target)) return null;
   const candidates = await iconCandidates(target);
   if (!candidates.length) return null;
   const key = iconKey(candidates.join("\0"));
@@ -79,24 +90,34 @@ async function getIcon(target) {
   } catch { return null; }
   return null;
 }
-async function resolveWindowsShortcut(filePath) {
-  if (process.platform !== "win32") return null;
-  const encoded = Buffer.from(filePath, "utf8").toString("base64");
-  const command = `$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'));$s=(New-Object -ComObject WScript.Shell).CreateShortcut($p);[PSCustomObject]@{target=$s.TargetPath;arguments=$s.Arguments;workingDirectory=$s.WorkingDirectory;description=$s.Description;iconLocation=$s.IconLocation}|ConvertTo-Json -Compress`;
+async function resolveWindowsShortcuts(filePaths) {
+  if (process.platform !== "win32" || filePaths.length === 0) return new Map();
+  const encoded = Buffer.from(JSON.stringify(filePaths), "utf8").toString("base64");
+  const command = `$paths=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))|ConvertFrom-Json;$shell=New-Object -ComObject WScript.Shell;@($paths|ForEach-Object{$s=$shell.CreateShortcut($_);[PSCustomObject]@{source=$_;target=$s.TargetPath;arguments=$s.Arguments;workingDirectory=$s.WorkingDirectory;description=$s.Description;iconLocation=$s.IconLocation}})|ConvertTo-Json -Compress`;
   try {
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true });
-    return JSON.parse(stdout);
-  } catch { return null; }
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
+    const parsed = JSON.parse(stdout);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    return new Map(list.filter((entry) => entry && entry.source).map((entry) => [entry.source, entry]));
+  } catch { return new Map(); }
+}
+async function resolveWindowsShortcut(filePath) {
+  const results = await resolveWindowsShortcuts([filePath]);
+  return results.get(filePath) || null;
 }
 function inferKind(target, directory = false) {
   if (/^https?:/i.test(target)) return "url";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return "protocol";
+  if (isProtocolTarget(target)) return "protocol";
   if (directory) return "folder";
   return /\.(exe|bat|cmd|lnk)$/i.test(target) ? "app" : "file";
 }
 async function scanFolder(folderPath) {
   const folder = expandEnvironment(folderPath);
   const entries = await fs.readdir(folder, { withFileTypes: true });
+  const lnkPaths = entries
+    .filter((entry) => !entry.isDirectory() && path.extname(entry.name).toLowerCase() === ".lnk")
+    .map((entry) => path.join(folder, entry.name));
+  const shortcutsByPath = await resolveWindowsShortcuts(lnkPaths);
   const results = [];
   for (const entry of entries) {
     const fullPath = path.join(folder, entry.name);
@@ -107,8 +128,8 @@ async function scanFolder(folderPath) {
     const extension = path.extname(entry.name).toLowerCase();
     if ([".exe", ".bat", ".cmd", ".lnk", ".url"].includes(extension)) {
       if (extension === ".lnk") {
-        const shortcut = await resolveWindowsShortcut(fullPath);
-        results.push({ name: path.basename(entry.name, extension), target: shortcut?.target || fullPath, kind: "app", arguments: shortcut?.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut?.workingDirectory || undefined, description: shortcut?.description || undefined, iconSource: fullPath, tags: ["shortcut"] });
+        const shortcut = shortcutsByPath.get(fullPath) || null;
+        results.push({ name: path.basename(entry.name, extension), target: shortcut?.target || fullPath, kind: shortcut?.target ? inferKind(shortcut.target) : "app", arguments: shortcut?.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut?.workingDirectory || undefined, description: shortcut?.description || undefined, iconSource: fullPath, tags: ["shortcut"] });
       } else if (extension === ".url") {
         const content = await fs.readFile(fullPath, "utf8").catch(() => "");
         const target = content.match(/^URL=(.+)$/mi)?.[1]?.trim() || fullPath;
@@ -128,8 +149,14 @@ async function openItem(item) {
   }
   if (!fssync.existsSync(target)) return { ok: false, error: "This path is unavailable. Relink the item before opening it." };
   if (item.kind === "app" && Array.isArray(item.arguments) && item.arguments.length > 0) {
+    const cwd = item.workingDirectory ? expandEnvironment(item.workingDirectory) : undefined;
+    if (cwd && !fssync.existsSync(cwd)) return { ok: false, error: "The configured working directory is unavailable." };
     try {
-      const child = spawn(target, item.arguments, { cwd: item.workingDirectory || undefined, detached: true, stdio: "ignore", windowsHide: true });
+      const isBatch = process.platform === "win32" && /\.(bat|cmd)$/i.test(target);
+      const child = isBatch
+        ? spawn("cmd.exe", ["/c", target, ...item.arguments], { cwd, detached: true, stdio: "ignore", windowsHide: true })
+        : spawn(target, item.arguments, { cwd, detached: true, stdio: "ignore", windowsHide: true });
+      child.on("error", () => {});
       child.unref();
       return { ok: true };
     } catch (error) { return { ok: false, error: String(error) }; }
@@ -144,6 +171,10 @@ function createWindow() {
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, "preload.cjs") }
   });
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   mainWindow.on("closed", () => { mainWindow = null; });
@@ -154,7 +185,7 @@ function registerIpc() {
   ipcMain.handle("library:open", (_, item) => openItem(item));
   ipcMain.handle("library:get-icon", (_, target) => getIcon(target));
   ipcMain.handle("library:path-exists", (_, target) => {
-    if (/^(https?:|[a-z][a-z0-9+.-]*:)/i.test(target || "")) return true;
+    if (isProtocolTarget(target)) return true;
     return Boolean(target && fssync.existsSync(expandEnvironment(target)));
   });
   ipcMain.handle("library:scan-folder", (_, target) => scanFolder(target));
@@ -164,7 +195,7 @@ function registerIpc() {
       const shortcut = await resolveWindowsShortcut(target);
       if (shortcut?.target) return { target: shortcut.target, kind: inferKind(shortcut.target), name: path.basename(target, path.extname(target)), arguments: shortcut.arguments ? parseWindowsArguments(shortcut.arguments) : [], workingDirectory: shortcut.workingDirectory || undefined, description: shortcut.description || undefined, iconSource: target };
     }
-    return { target, kind: "file", name: path.basename(target, path.extname(target)) };
+    return { target, kind: inferKind(target), name: path.basename(target, path.extname(target)) };
   };
   const chooseResources = async (kind, multiple = false) => {
     const properties = kind === "folder" ? ["openDirectory"] : ["openFile"];

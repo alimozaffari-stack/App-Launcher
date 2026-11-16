@@ -9,9 +9,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Check out release source
         uses: actions/checkout@v5
@@ -35,7 +40,7 @@ jobs:
         run: '"value=$((Get-Content package.json -Raw | ConvertFrom-Json).version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
 
       - name: Publish downloadable Windows release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@40c2ca6ddd77ba2a30bbea8f67409c0f76868d67 # v3
         with:
           tag_name: v${{ steps.version.outputs.value }}
           name: App Launcher v${{ steps.version.outputs.value }}

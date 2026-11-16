@@ -75,8 +75,9 @@ If you previously used an internal or localhost-based pre-release and its librar
 ## What this release changes
 
 - Existing `localhost` launcher data is migrated once into a local v2 library file, with a browser-storage backup retained.
-- Each item has a primary purpose and can belong to additional groups.
-- Groups and tags are displayed alphabetically; the library supports flat, purpose and A–Z views.
+- Each item has a primary group and can belong to additional groups.
+- Groups and tags are displayed alphabetically; the library supports flat and by-group views, keyboard-first search (`Ctrl+K` / `/`), and expandable `#tag` filtering.
+- Destructive actions use in-app confirmation dialogs, and folder scans support per-item selection before importing.
 - The dashboard panels can be collapsed, hidden and restored.
 - Workspaces combine applications with actual folders, files, URLs and protocol links.
 - Workspace-only folders and files can be added directly from the Workspaces panel without appearing in the general library.

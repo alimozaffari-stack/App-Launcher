@@ -68,20 +68,3 @@ export interface ImportedResource {
   iconSource?: string;
   tags?: string[];
 }
-
-// Retained only for unused pre-v2 component files that may remain in an existing checkout.
-// New application code uses LibraryItem exclusively.
-export interface Shortcut {
-  id: string;
-  name: string;
-  execPath: string;
-  category: string;
-  tags: string[];
-  iconUrl?: string;
-  description?: string;
-  createdAt: number;
-  order?: number;
-  isFavorite?: boolean;
-  lastLaunchedAt?: number;
-}
-export interface SuggestionResponse { category: string; tags: string[]; description: string; }
